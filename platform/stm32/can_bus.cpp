@@ -1,0 +1,137 @@
+#include "platform/stm32/can_bus.hpp"
+#include "platform/can/can_types.hpp"
+#include "stm32h7xx_hal_fdcan.h"
+
+#include <array>
+#include <cstdint>
+
+namespace {
+    bool decodeClassicCanLength(uint32_t dlc,uint8_t& length) noexcept {
+        switch (dlc) {
+        case FDCAN_DLC_BYTES_0: length = 0; return true;
+        case FDCAN_DLC_BYTES_1: length = 1; return true;
+        case FDCAN_DLC_BYTES_2: length = 2; return true;
+        case FDCAN_DLC_BYTES_3: length = 3; return true;
+        case FDCAN_DLC_BYTES_4: length = 4; return true;
+        case FDCAN_DLC_BYTES_5: length = 5; return true;
+        case FDCAN_DLC_BYTES_6: length = 6; return true;
+        case FDCAN_DLC_BYTES_7: length = 7; return true;
+        case FDCAN_DLC_BYTES_8: length = 8; return true;
+        default:
+            length = 0;
+            return false;
+        }
+    }
+
+    bool decodeIdFormat(uint32_t hal_id_type,librmcs::can::IdFormat& format) noexcept {
+        if (hal_id_type == FDCAN_STANDARD_ID) {
+            format = librmcs::can::IdFormat::Standard;
+            return true;
+        }
+
+        if (hal_id_type == FDCAN_EXTENDED_ID) {
+            format = librmcs::can::IdFormat::Extended;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool decodeFrameKind(uint32_t hal_frame_type,librmcs::can::FrameKind& kind) noexcept {
+        if (hal_frame_type == FDCAN_DATA_FRAME) {
+            kind = librmcs::can::FrameKind::Data;
+            return true;
+        }
+
+        if (hal_frame_type == FDCAN_REMOTE_FRAME) {
+            kind = librmcs::can::FrameKind::Remote;
+            return true;
+        }
+
+        return false;
+    }
+}
+
+namespace librmcs::platform{
+    bool CanBus::start() noexcept{
+        if(started_){
+            return true;
+        }
+
+        if(HAL_FDCAN_ConfigGlobalFilter(
+            &handle_,
+            FDCAN_ACCEPT_IN_RX_FIFO0,
+            FDCAN_ACCEPT_IN_RX_FIFO0,
+            FDCAN_REJECT_REMOTE,
+            FDCAN_REJECT_REMOTE) != HAL_OK){
+        hal_errors_.fetch_add(1,std::memory_order_relaxed);
+            return false;
+        }
+
+        if(HAL_FDCAN_Start(&handle_) != HAL_OK){
+            hal_errors_.fetch_add(1,std::memory_order_relaxed);
+            return false;
+        }
+
+        if(HAL_FDCAN_ActivateNotification(
+            &handle_,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
+            0) != HAL_OK){
+            hal_errors_.fetch_add(1,std::memory_order_relaxed);
+            HAL_FDCAN_Stop(&handle_);
+            return false;
+        }
+
+        started_ = true;
+        return true;
+    }
+
+    void CanBus::onRxFifo0Interrupt() noexcept{
+        while(HAL_FDCAN_GetRxFifoFillLevel(
+            &handle_,
+            FDCAN_RX_FIFO0) > 0){
+            FDCAN_RxHeaderTypeDef header{};
+            std::array<uint8_t, 8> payload{};
+
+            if(HAL_FDCAN_GetRxMessage(
+                &handle_,
+                FDCAN_RX_FIFO0,
+                &header,
+                payload.data()) != HAL_OK){
+                    hal_errors_.fetch_add(1,std::memory_order_relaxed);
+                    break;
+            }
+
+            can::Frame frame{};
+            frame.id = header.Identifier;
+            frame.data = payload;
+            
+            const bool valid = header.FDFormat == FDCAN_CLASSIC_CAN &&
+                                 decodeClassicCanLength(header.DataLength,frame.length) &&
+                                 decodeIdFormat(header.IdType,frame.id_format) &&
+                                 decodeFrameKind(header.RxFrameType,frame.kind);
+            if(!valid){
+                invalid_frames_.fetch_add(1,std::memory_order_relaxed);
+                continue;
+            }
+            if(!rx_queue_.pushFromIsr(frame)){
+                dropped_frames_.fetch_add(1,std::memory_order_relaxed);
+                continue;
+            }
+            received_frames_.fetch_add(1,std::memory_order_relaxed);
+        }
+    }
+
+    bool CanBus::popReceived(can::Frame& frame) noexcept{
+        return rx_queue_.pop(frame);
+    }
+
+    CanBusState CanBus::stats() const noexcept{
+        return CanBusState{
+            .received_frames = received_frames_.load(std::memory_order_relaxed),
+            .dropped_frames = dropped_frames_.load(std::memory_order_relaxed),
+            .invalid_frames = invalid_frames_.load(std::memory_order_relaxed),
+            .hal_error = hal_errors_.load(std::memory_order_relaxed)
+        };
+    }
+}

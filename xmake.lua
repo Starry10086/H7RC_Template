@@ -24,10 +24,19 @@ target("application", function()
     -- 从CubeMX生成的Makefile中读取hal的源文件和头文件
     on_load("script.read_hal_makefile")
 
-    -- 添加源文件和头文件
-    -- add_files("bsp/SEGGER/**.c", "bsp/SEGGER/**.S")
-    -- add_files("app/**.cpp", "utility/**.cpp")
-    -- add_files("app/**.h")
+    -- SEGGER RTT backend
+    add_files("third_party/segger_rtt/RTT/SEGGER_RTT.c")
+    add_includedirs("platform/segger")
+    add_includedirs("third_party/segger_rtt/RTT")
+
+    -- 添加工程源文件
+    add_files(
+        "app/**.cpp",
+        "components/**.c",
+        "components/**.cpp",
+        "control/**.cpp"
+    )
+    add_files("devices/**.cpp", "platform/**.cpp", "robot/**.cpp")
     add_includedirs(".")
     
 
@@ -65,6 +74,7 @@ target("application", function()
     add_ldflags("-lc", "-lm", "-lstdc++")
     -- 在链接时打印内存占用
     add_ldflags("-Wl,--print-memory-usage")
+    add_ldflags("-Wl,-u,_printf_float")
 
     -- 启用垃圾收集：在链接过程中删除未使用的变量和函数
     add_ldflags("-Wl,--gc-sections")

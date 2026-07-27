@@ -168,6 +168,17 @@ SECTIONS
     _edata = .;        /* define a global symbol at data end */
   } >DTCMRAM AT> FLASH
 
+  .rtt (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __rtt_start__ = .;
+
+    KEEP(*(.rtt))
+    KEEP(*(.rtt*))
+
+    . = ALIGN(32);
+    __rtt_end__ = .;
+  } >RAM_D1
 
   /* Uninitialized data section */
   . = ALIGN(4);
