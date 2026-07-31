@@ -50,6 +50,57 @@ namespace {
 
         return false;
     }
+
+    bool encodeClassicCanLength(uint8_t length,uint32_t& dlc) noexcept {
+        switch (length) {
+            case 0U: dlc = FDCAN_DLC_BYTES_0; return true;
+            case 1U: dlc = FDCAN_DLC_BYTES_1; return true;
+            case 2U: dlc = FDCAN_DLC_BYTES_2; return true;
+            case 3U: dlc = FDCAN_DLC_BYTES_3; return true;
+            case 4U: dlc = FDCAN_DLC_BYTES_4; return true;
+            case 5U: dlc = FDCAN_DLC_BYTES_5; return true;
+            case 6U: dlc = FDCAN_DLC_BYTES_6; return true;
+            case 7U: dlc = FDCAN_DLC_BYTES_7; return true;
+            case 8U: dlc = FDCAN_DLC_BYTES_8; return true;
+            default:
+                dlc = FDCAN_DLC_BYTES_0;
+                return false;
+        }
+    }
+
+    bool encodeIdFormat(librmcs::can::IdFormat format,uint32_t& hal_id_format) noexcept {
+        switch (format) {
+            case librmcs::can::IdFormat::Standard:
+                hal_id_format = FDCAN_STANDARD_ID;
+                return true;
+            case librmcs::can::IdFormat::Extended:
+                hal_id_format = FDCAN_EXTENDED_ID;
+                return true;
+        }
+        return false;
+    }
+
+    bool encodeFrameKind(librmcs::can::FrameKind kind,uint32_t& hal_frame_kind) noexcept {
+        switch (kind) {
+        case librmcs::can::FrameKind::Data:
+            hal_frame_kind = FDCAN_DATA_FRAME;
+            return true;
+        case librmcs::can::FrameKind::Remote:
+            hal_frame_kind = FDCAN_REMOTE_FRAME;
+            return true;
+        }
+        return false;
+    }
+
+    bool isValidCanId(uint32_t id,librmcs::can::IdFormat format) noexcept {
+        switch (format) {
+            case librmcs::can::IdFormat::Standard:
+                return id <= 0x7FFU;
+            case librmcs::can::IdFormat::Extended:
+                return id <= 0x1FFFFFFFU;
+        }
+        return false;
+    }
 }
 
 namespace librmcs::platform{
@@ -83,6 +134,45 @@ namespace librmcs::platform{
         }
 
         started_ = true;
+        return true;
+    }
+
+    bool CanBus::send(const can::Frame& frame) noexcept{
+        if(!started_ || frame.length > 8U){
+            rejected_transmit_frames_.fetch_add(1,std::memory_order_relaxed);
+            return false;
+        }
+
+        uint32_t data_length = FDCAN_DLC_BYTES_0;
+        uint32_t id_format = FDCAN_STANDARD_ID;
+        uint32_t frame_kind = FDCAN_DATA_FRAME;
+
+        const bool valid = encodeClassicCanLength(frame.length,data_length) &&
+                           encodeIdFormat(frame.id_format,id_format) &&
+                           encodeFrameKind(frame.kind,frame_kind) &&
+                           isValidCanId(frame.id,frame.id_format);
+        if(!valid){
+            rejected_transmit_frames_.fetch_add(1,std::memory_order_relaxed);
+            return false;
+        }
+
+        FDCAN_TxHeaderTypeDef header{};
+        header.Identifier = frame.id;
+        header.IdType = id_format;
+        header.TxFrameType = frame_kind;
+        header.DataLength = data_length;
+        header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+        header.BitRateSwitch = FDCAN_BRS_OFF;
+        header.FDFormat = FDCAN_CLASSIC_CAN;
+        header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+        header.MessageMarker = 0U;
+
+        if(HAL_FDCAN_AddMessageToTxFifoQ(&handle_,&header,frame.data.data()) != HAL_OK){
+            hal_errors_.fetch_add(1,std::memory_order_relaxed);
+            return false;
+        }
+
+        queued_transmit_frames_.fetch_add(1,std::memory_order_relaxed);
         return true;
     }
 
@@ -131,7 +221,9 @@ namespace librmcs::platform{
             .received_frames = received_frames_.load(std::memory_order_relaxed),
             .dropped_frames = dropped_frames_.load(std::memory_order_relaxed),
             .invalid_frames = invalid_frames_.load(std::memory_order_relaxed),
-            .hal_error = hal_errors_.load(std::memory_order_relaxed)
+            .hal_error = hal_errors_.load(std::memory_order_relaxed),
+            .queued_transmit_frames = queued_transmit_frames_.load(std::memory_order_relaxed),
+            .rejected_transmit_frames = rejected_transmit_frames_.load(std::memory_order_relaxed)
         };
     }
 }

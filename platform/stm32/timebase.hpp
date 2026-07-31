@@ -4,6 +4,6 @@
 
 namespace librmcs::platform {
 
-[[nodiscard]] uint32_t nowMs() noexcept;
+uint32_t nowMs() noexcept;
 
 } // namespace librmcs::platform

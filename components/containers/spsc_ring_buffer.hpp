@@ -38,7 +38,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool empty() const noexcept {
+     bool empty() const noexcept {
         return read_index_.load(std::memory_order_acquire) == write_index_.load(std::memory_order_acquire);
     }
 

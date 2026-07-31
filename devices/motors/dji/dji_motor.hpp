@@ -160,8 +160,8 @@ public:
 
         state_topic_.publish(
             MotorState{
-                .position_rad = static_cast<float>(angle_),
-                .velocity_rad_s = static_cast<float>(velocity_),
+                .pos_rad = static_cast<float>(angle_),
+                .vel_rad_s = static_cast<float>(velocity_),
                 .torque_nm = static_cast<float>(torque_),
                 .temperature_c = static_cast<float>(temperature_),
                 .fault_code = 0U,
@@ -169,14 +169,15 @@ public:
         platform::nowMs());
     }
 
-    uint16_t generate_command(double control_torque) const {
+    int16_t encodeTorqueCommand(double control_torque) const noexcept {
         if (std::isnan(control_torque)) {
             return 0;
         }
 
         control_torque = std::clamp(control_torque, -max_torque_, max_torque_);
-        double current = std::round(torque_to_raw_current_coefficient_ * control_torque);
-        return host_to_big_endian(static_cast<int16_t>(current));
+        const double raw_current = std::round(
+            torque_to_raw_current_coefficient_ * control_torque);
+        return static_cast<int16_t>(raw_current);
     }
 
     int calibrate_zero_point() {
@@ -198,11 +199,6 @@ private:
 
     static constexpr int16_t readBigEndianI16(uint8_t high, uint8_t low) noexcept{
         return std::bit_cast<int16_t>(readBigEndianU16(high, low));
-    }
-
-    static constexpr uint16_t host_to_big_endian(int16_t value) {
-        const uint16_t raw = static_cast<uint16_t>(value);
-        return static_cast<uint16_t>((raw << 8) | (raw >> 8));
     }
 
     messaging::StateTopic<MotorState>& state_topic_;

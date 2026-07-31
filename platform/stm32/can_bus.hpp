@@ -16,6 +16,8 @@ struct CanBusState{
     uint32_t dropped_frames{0};     // 记录丢弃的帧数
     uint32_t invalid_frames{0};     // 记录无效帧数
     uint32_t hal_error{0};          // 记录HAL错误数
+    uint32_t queued_transmit_frames{0}; // 记录HAL 已经接受并放入硬件FIFO的帧数
+    uint32_t rejected_transmit_frames{0}; // 记录因未启动，长度，ID或枚举值非法而被软件拒绝的帧数
 };
 
 class CanBus final{
@@ -29,13 +31,15 @@ public:
     CanBus& operator=(const CanBus&) = delete;
 
     // 必须在MX_FDCANx_Init()之后调用。
-    [[nodiscard]] bool start() noexcept;
+     bool start() noexcept;
+    // 只能从主循环调用，不要在中断中发送。
+    bool send(const can::Frame& frame) noexcept;
     // 只能从对应FDCAN的FIFO0中断回调调用
     void onRxFifo0Interrupt() noexcept;
     // 只能从主循环调用。
-    [[nodiscard]] bool popReceived(can::Frame& frame) noexcept;
-    [[nodiscard]] CanBusState stats() const noexcept;
-    [[nodiscard]] FDCAN_HandleTypeDef& handle() noexcept { return handle_; }
+    bool popReceived(can::Frame& frame) noexcept;
+    CanBusState stats() const noexcept;
+    FDCAN_HandleTypeDef& handle() noexcept { return handle_; }
 
 private:
     FDCAN_HandleTypeDef& handle_;
@@ -44,6 +48,8 @@ private:
     std::atomic<uint32_t> dropped_frames_{0};
     std::atomic<uint32_t> invalid_frames_{0};
     std::atomic<uint32_t> hal_errors_{0};
+    std::atomic<uint32_t> queued_transmit_frames_{0U};
+    std::atomic<uint32_t> rejected_transmit_frames_{0U};
     bool started_{false};
 };
 }

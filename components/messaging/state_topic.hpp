@@ -25,7 +25,7 @@ public:
         valid_ = true;
     }
 
-    [[nodiscard]] bool read(StateSample<T>& output) const noexcept{
+     bool read(StateSample<T>& output) const noexcept{
         if(!valid_){
             return false;
         }
@@ -34,7 +34,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool readIfNew(uint32_t& last_sequence, StateSample<T>& output) const noexcept{
+     bool readIfNew(uint32_t& last_sequence, StateSample<T>& output) const noexcept{
         if(!valid_ || last_sequence == sample_.sequence){
             return false;
         }
@@ -44,7 +44,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::string_view name() const noexcept {
+     std::string_view name() const noexcept {
         return name_;
     }
 private:
@@ -53,9 +53,7 @@ private:
     bool valid_{false};
 };
 
-[[nodiscard]] constexpr bool isFresh(uint32_t now_ms,
-                                     uint32_t sample_time_ms,
-                                     uint32_t timeout_ms) noexcept {
+constexpr bool isFresh(uint32_t now_ms, uint32_t sample_time_ms, uint32_t timeout_ms) noexcept {
     return static_cast<uint32_t>(now_ms - sample_time_ms) <= timeout_ms;
 }
 

@@ -51,7 +51,7 @@ public:
               &receiver);
     }
 
-    [[nodiscard]] bool dispatch(const Frame& frame) noexcept{
+    bool dispatch(const Frame& frame) noexcept{
         for(std::size_t i = 0; i < route_count_; ++i){
             const Route& route = routes_[i];
 
@@ -75,7 +75,7 @@ public:
         return false;
     }
 
-    [[nodiscard]] RouterStats stats() const noexcept {
+    RouterStats stats() const noexcept {
         return RouterStats{
             .bound_routes = route_count_,
             .routed_frames = routed_frames_,
@@ -95,7 +95,7 @@ private:
         void* context{nullptr};     // 由谁处理
     };
 
-    [[nodiscard]] bool routesOverlap(IdFormat format, FrameKind kind, uint32_t id, uint32_t mask) const noexcept{
+    bool routesOverlap(IdFormat format, FrameKind kind, uint32_t id, uint32_t mask) const noexcept{
         for(std::size_t i = 0; i < route_count_; ++i){
             const Route& route = routes_[i];
 

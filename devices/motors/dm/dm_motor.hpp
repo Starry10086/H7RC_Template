@@ -1,11 +1,15 @@
 #pragma once
 
-#include <cstdint>
-#include <atomic>
 #include <algorithm>
-#include <cstring>
+#include <array>
 #include <bit>
-#include <chrono>
+#include <cmath>
+#include <cstdint>
+
+#include "components/messaging/state_topic.hpp"
+#include "devices/motors/motor_state.hpp"
+#include "platform/can/can_types.hpp"
+#include "platform/stm32/timebase.hpp"
 
 /*
 @breif DM电机返回的和设置的参数均以经过减速比转换后的输出端参数
@@ -18,8 +22,10 @@ public:
     enum class ControlMode : uint8_t {MIT,Pos_Vel,Vel};
 
     struct Config{
-        explicit Config(Type motor_type)
+        explicit Config(Type motor_type,
+                        uint16_t command_id_value = 0x01U)
         : control_mode(ControlMode::MIT)
+        , command_id(command_id_value)
         , reduction_ratio(reduction_ratio_init(motor_type))
         , KP_Max(500.0)
         , KD_Max(5.0)
@@ -33,35 +39,23 @@ public:
         Config& set_multi_turn_angle() { return multi_turn_angle_enabled = true, *this; }
         Config& set_reduction_ratio(float value) { return reduction_ratio = value, *this; }
         Config& set_control_mode(ControlMode value) { return control_mode = value, *this; }
+        Config& set_command_id(uint16_t value) { return command_id = value, *this; }
     
-    ControlMode control_mode;
-    float reduction_ratio;
-    float KP_Max;
-    float KD_Max;
-    float Pos_Max;
-    float Vel_Max;
-    float Tor_Max;
-    bool reversed;
-    bool multi_turn_angle_enabled;
+        ControlMode control_mode;
+        uint16_t command_id;
+        float reduction_ratio;
+        float KP_Max;
+        float KD_Max;
+        float Pos_Max;
+        float Vel_Max;
+        float Tor_Max;
+        bool reversed;
+        bool multi_turn_angle_enabled;
     };
 
-    DmMotor()
-    :ERR(0)
-    ,Angle(0.0)
-    ,VEL(0.0)
-    ,TOR(0.0)
-    ,T_MOS(0.0)
-    ,T_Rotor(0.0)
-    ,reversed_sign(1.0) {}
-    
-    explicit DmMotor(const Config& config)
-    :ERR(0)
-    ,Angle(0.0)
-    ,VEL(0.0)
-    ,TOR(0.0)
-    ,T_MOS(0.0)
-    ,T_Rotor(0.0)
-    ,reversed_sign(1.0) {
+    DmMotor() = delete;
+    DmMotor(const Config& config, messaging::StateTopic<MotorState>& state_topic) noexcept
+    : state_topic_(state_topic){
         configure(config);
     }
 
@@ -69,8 +63,9 @@ public:
     DmMotor(const DmMotor&) = delete;
     DmMotor& operator=(const DmMotor&) = delete;
 
-    void configure(const Config& config) {
+    void configure(const Config& config) noexcept{
         control_mode_ = config.control_mode;
+        command_id_ = config.command_id;
         reduction_ratio = config.reduction_ratio;
         KP_Max = config.KP_Max;
         KD_Max = config.KD_Max;
@@ -82,138 +77,184 @@ public:
         reversed_sign = config.reversed ? -1.0 : 1.0;
     }
 
-    void store_status(uint64_t can_data) {
-        can_data_.store(can_data, std::memory_order_relaxed);
-        feedback_seen_ = true;
-        last_feedback_time_ = std::chrono::steady_clock::now();
-    }
-    bool online(std::chrono::milliseconds timeout = std::chrono::milliseconds(200)) const {
-        if(!feedback_seen_)
-            return false;
-        auto now = std::chrono::steady_clock::now();
-        return (now - last_feedback_time_) <= timeout;
-    }
-
-    void update_status() {
-        auto feedback = std::bit_cast<DmMotorFeedback>(can_data_.load(std::memory_order_acquire));
-
-        uint16_t POS_ = feedback.Pos();
-        uint16_t VEL_ = feedback.Vel();
-        uint16_t TOR_ = feedback.Tor();
-        uint8_t T_MOS_ = feedback.T_MOS();
-        uint8_t T_Rotor_ = feedback.T_Rotor();
-        
-        ERR = feedback.ERR();
-        reversed_sign = reversed ? -1.0 : 1.0;
-
-        Angle = uint_to_float(POS_, -Pos_Max, Pos_Max, 16) * reversed_sign;
-        VEL = uint_to_float(VEL_, -Vel_Max, Vel_Max, 12) * reversed_sign;
-        TOR = uint_to_float(TOR_, -Tor_Max, Tor_Max, 12) * reversed_sign;
-        T_MOS = uint_to_float(T_MOS_, 0.0, 100.0, 8);
-        T_Rotor = uint_to_float(T_Rotor_, 0.0, 100.0, 8);
-    }
-
-    uint64_t generate_command(float target_pos, float target_vel, float target_Kp,float target_Kd,float target_tff) {
-        uint8_t can_data[8] = {0};
-        uint64_t result_can_data = 0;
-        target_pos *= reversed_sign;
-        target_vel *= reversed_sign;
-        target_tff *= reversed_sign;
-
-        target_pos = std::clamp(target_pos, -Pos_Max, Pos_Max);
-        target_vel = std::clamp(target_vel, -Vel_Max, Vel_Max);
-        target_tff = std::clamp(target_tff, -Tor_Max, Tor_Max);
-        target_Kp = std::clamp(target_Kp, 0.0f, KP_Max);
-        target_Kd = std::clamp(target_Kd, 0.0f, KD_Max);
-        
-        uint16_t target_pos_uint = float_to_uint(target_pos, -Pos_Max, Pos_Max, 16);
-        uint16_t target_vel_uint = float_to_uint(target_vel, -Vel_Max, Vel_Max, 12);
-        uint16_t target_tff_uint = float_to_uint(target_tff, -Tor_Max, Tor_Max, 12);
-        uint16_t target_Kp_uint = float_to_uint(target_Kp, 0.0f, KP_Max, 12);
-        uint16_t target_Kd_uint = float_to_uint(target_Kd, 0.0f, KD_Max, 12);
-
-        switch(control_mode_){
-            case ControlMode::MIT:
-                can_data[0] = (target_pos_uint >> 8) & 0xff;
-                can_data[1] = target_pos_uint & 0xff;
-                can_data[2] = (target_vel_uint >> 4) & 0xff;
-                can_data[3] = (target_vel_uint & 0x0f) << 4 | ((target_Kp_uint >> 8 & 0x0f));
-                can_data[4] = target_Kp_uint & 0xff;
-                can_data[5] = (target_Kd_uint >> 4) & 0xff;
-                can_data[6] = (target_Kd_uint & 0x0f) << 4 | ((target_tff_uint >> 8) & 0x0f);
-                can_data[7] = target_tff_uint & 0xff;
-            break;
-            case ControlMode::Pos_Vel:
-                memcpy(&can_data[0],&target_pos,sizeof(float));// 从 target_pos 的内存位置复制 4 字节到 can_data[0] 开始的位置
-                memcpy(&can_data[4],&target_vel,sizeof(float));
-            break;
-            case ControlMode::Vel:
-                memcpy(&can_data[0],&target_vel,sizeof(float));
-                can_data[4] = 0x00;
-                can_data[5] = 0x00;
-                can_data[6] = 0x00;
-                can_data[7] = 0x00;
-            break;
-            default: break;
+    void handleCanFrame(const can::Frame& frame) noexcept {
+        if (frame.id_format != can::IdFormat::Standard ||
+            frame.kind != can::FrameKind::Data ||
+            frame.length != 8U) {
+            return;
         }
-        memcpy(&result_can_data,can_data,8);
-        return result_can_data;
-    }
-     
-    static uint64_t Enable_Motor() {
-        uint8_t can_data[8] = {0};
-        can_data[0] = 0xFF;
-        can_data[1] = 0xFF;
-        can_data[2] = 0xFF;
-        can_data[3] = 0xFF;
-        can_data[4] = 0xFF;
-        can_data[5] = 0xFF;
-        can_data[6] = 0xFF;
-        can_data[7] = 0xFC;
-        auto result_can_data = std::bit_cast<uint64_t>(can_data);
-        return result_can_data;
-    }
-    static uint64_t Disable_Motor() {
-        uint8_t can_data[8] = {0};
-        can_data[0] = 0xFF;
-        can_data[1] = 0xFF;
-        can_data[2] = 0xFF;
-        can_data[3] = 0xFF;
-        can_data[4] = 0xFF;
-        can_data[5] = 0xFF;
-        can_data[6] = 0xFF;
-        can_data[7] = 0xFD;
 
-        auto result_can_data = std::bit_cast<uint64_t>(can_data);
-        return result_can_data;
-    }
-    static uint64_t Save_Zero_Position() {
-        uint8_t can_data[8] = {0};
-        can_data[0] = 0xFF;
-        can_data[1] = 0xFF;
-        can_data[2] = 0xFF;
-        can_data[3] = 0xFF;
-        can_data[4] = 0xFF;
-        can_data[5] = 0xFF;
-        can_data[6] = 0xFF;
-        can_data[7] = 0xFE;
+        const auto& data = frame.data;
 
-        auto result_can_data = std::bit_cast<uint64_t>(can_data);
-        return result_can_data;
-    }
-    static uint64_t Clear_Error() {
-        uint8_t can_data[8] = {0};
-        can_data[0] = 0xFF;
-        can_data[1] = 0xFF;
-        can_data[2] = 0xFF;
-        can_data[3] = 0xFF;
-        can_data[4] = 0xFF;
-        can_data[5] = 0xFF;
-        can_data[6] = 0xFF;
-        can_data[7] = 0xFB;
+        /*
+        * data[0]:
+        * 高4位：电机状态/故障码
+        * 低4位：反馈中的电机ID
+        */
+        ERR = static_cast<uint8_t>((data[0] >> 4U) & 0x0FU);
 
-        auto result_can_data = std::bit_cast<uint64_t>(can_data);
-        return result_can_data;
+        const uint16_t raw_position =
+            static_cast<uint16_t>(
+                (static_cast<uint16_t>(data[1]) << 8U) |
+                static_cast<uint16_t>(data[2]));
+
+        const uint16_t raw_velocity =
+            static_cast<uint16_t>(
+                (static_cast<uint16_t>(data[3]) << 4U) |
+                (static_cast<uint16_t>(data[4]) >> 4U));
+
+        const uint16_t raw_torque =
+            static_cast<uint16_t>(
+                (static_cast<uint16_t>(data[4] & 0x0FU) << 8U) |
+                static_cast<uint16_t>(data[5]));
+
+        Angle = uint_to_float(
+                    raw_position,
+                    -Pos_Max,
+                    Pos_Max,
+                    16) *
+                reversed_sign;
+
+        VEL = uint_to_float(
+                raw_velocity,
+                -Vel_Max,
+                Vel_Max,
+                12) *
+            reversed_sign;
+
+        TOR = uint_to_float(
+                raw_torque,
+                -Tor_Max,
+                Tor_Max,
+                12) *
+            reversed_sign;
+
+        T_MOS = static_cast<float>(data[6]);
+        T_Rotor = static_cast<float>(data[7]);
+
+        state_topic_.publish(
+            MotorState{
+                .pos_rad = Angle,
+                .vel_rad_s = VEL,
+                .torque_nm = TOR,
+                .temperature_c = T_Rotor,
+                .fault_code = static_cast<uint32_t>(ERR),
+            },
+            platform::nowMs());
+    }
+
+    can::Frame makeControlFrame(float target_position,
+                                float target_velocity,
+                                float target_kp,
+                                float target_kd,
+                                float feedforward_torque) const noexcept {
+        switch (control_mode_) {
+        case ControlMode::MIT:
+            return makeMitControlFrame(
+                target_position,
+                target_velocity,
+                target_kp,
+                target_kd,
+                feedforward_torque);
+        case ControlMode::Pos_Vel:
+            return makePositionVelocityFrame(
+                target_position,
+                target_velocity);
+        case ControlMode::Vel:
+            return makeVelocityFrame(target_velocity);
+        }
+
+        return makeDataFrame();
+    }
+
+    can::Frame makeMitControlFrame(float target_position,
+                                   float target_velocity,
+                                   float target_kp,
+                                   float target_kd,
+                                   float feedforward_torque) const noexcept {
+        target_position = clampFinite(
+            target_position * reversed_sign,
+            -Pos_Max,
+            Pos_Max);
+        target_velocity = clampFinite(
+            target_velocity * reversed_sign,
+            -Vel_Max,
+            Vel_Max);
+        target_kp = clampFinite(target_kp, 0.0F, KP_Max);
+        target_kd = clampFinite(target_kd, 0.0F, KD_Max);
+        feedforward_torque = clampFinite(
+            feedforward_torque * reversed_sign,
+            -Tor_Max,
+            Tor_Max);
+
+        const uint16_t raw_position = float_to_uint(
+            target_position, -Pos_Max, Pos_Max, 16U);
+        const uint16_t raw_velocity = float_to_uint(
+            target_velocity, -Vel_Max, Vel_Max, 12U);
+        const uint16_t raw_kp = float_to_uint(
+            target_kp, 0.0F, KP_Max, 12U);
+        const uint16_t raw_kd = float_to_uint(
+            target_kd, 0.0F, KD_Max, 12U);
+        const uint16_t raw_torque = float_to_uint(
+            feedforward_torque, -Tor_Max, Tor_Max, 12U);
+
+        can::Frame frame = makeDataFrame();
+        frame.data[0] = static_cast<uint8_t>(raw_position >> 8U);
+        frame.data[1] = static_cast<uint8_t>(raw_position & 0xFFU);
+        frame.data[2] = static_cast<uint8_t>(raw_velocity >> 4U);
+        frame.data[3] = static_cast<uint8_t>(
+            ((raw_velocity & 0x0FU) << 4U) |
+            ((raw_kp >> 8U) & 0x0FU));
+        frame.data[4] = static_cast<uint8_t>(raw_kp & 0xFFU);
+        frame.data[5] = static_cast<uint8_t>(raw_kd >> 4U);
+        frame.data[6] = static_cast<uint8_t>(
+            ((raw_kd & 0x0FU) << 4U) |
+            ((raw_torque >> 8U) & 0x0FU));
+        frame.data[7] = static_cast<uint8_t>(raw_torque & 0xFFU);
+        return frame;
+    }
+
+    can::Frame makePositionVelocityFrame(float target_position, float target_velocity) const noexcept {
+        target_position = clampFinite(
+            target_position * reversed_sign,
+            -Pos_Max,
+            Pos_Max);
+        target_velocity = clampFinite(
+            target_velocity * reversed_sign,
+            -Vel_Max,
+            Vel_Max);
+
+        can::Frame frame = makeDataFrame();
+        writeLittleEndianFloat(frame.data, 0U, target_position);
+        writeLittleEndianFloat(frame.data, 4U, target_velocity);
+        return frame;
+    }
+
+    can::Frame makeVelocityFrame(float target_velocity) const noexcept {
+        target_velocity = clampFinite(
+            target_velocity * reversed_sign,
+            -Vel_Max,
+            Vel_Max);
+
+        can::Frame frame = makeDataFrame();
+        writeLittleEndianFloat(frame.data, 0U, target_velocity);
+        return frame;
+    }
+
+    can::Frame makeEnableFrame() const noexcept {
+        return makeSpecialCommandFrame(0xFCU);
+    }
+
+    can::Frame makeDisableFrame() const noexcept {
+        return makeSpecialCommandFrame(0xFDU);
+    }
+
+    can::Frame makeSaveZeroPositionFrame() const noexcept {
+        return makeSpecialCommandFrame(0xFEU);
+    }
+
+    can::Frame makeClearErrorFrame() const noexcept {
+        return makeSpecialCommandFrame(0xFBU);
     }
     float angle() const { return Angle; }
     float velocity() const { return VEL; }
@@ -225,6 +266,43 @@ public:
 
 
 private:
+    can::Frame makeDataFrame() const noexcept {
+        can::Frame frame{};
+        frame.id = command_id_;
+        frame.id_format = can::IdFormat::Standard;
+        frame.kind = can::FrameKind::Data;
+        frame.length = 8U;
+        return frame;
+    }
+
+    can::Frame makeSpecialCommandFrame(uint8_t command) const noexcept {
+        can::Frame frame = makeDataFrame();
+        frame.data.fill(uint8_t{0xFFU});
+        frame.data[7] = command;
+        return frame;
+    }
+
+    static void writeLittleEndianFloat(std::array<uint8_t, 8>& data, uint8_t offset, float value) noexcept {
+        static_assert(sizeof(float) == sizeof(uint32_t));
+
+        const uint32_t raw = std::bit_cast<uint32_t>(value);
+        data[offset] = static_cast<uint8_t>(raw & 0xFFU);
+        data[offset + 1U] =
+            static_cast<uint8_t>((raw >> 8U) & 0xFFU);
+        data[offset + 2U] =
+            static_cast<uint8_t>((raw >> 16U) & 0xFFU);
+        data[offset + 3U] =
+            static_cast<uint8_t>((raw >> 24U) & 0xFFU);
+    }
+
+    static float clampFinite(float value, float minimum, float maximum) noexcept {
+        if (!std::isfinite(value)) {
+            return 0.0F;
+        }
+
+        return std::clamp(value, minimum, maximum);
+    }
+
     static float reduction_ratio_init(Type motor_type) {
         switch (motor_type) {
             case Type::DM_J4310_2EC: return 10.0;
@@ -245,46 +323,37 @@ private:
         return static_cast<float>(x_int) * span / static_cast<float>((1 << bits) - 1) + offset;
     }
 
-    static uint16_t float_to_uint(float x, float x_min, float x_max, int bits){
-        float span = x_max - x_min;
-        float offset = x_min;
-        if(x > x_max) x=x_max;
-        else if(x < x_min) x= x_min;
-        return static_cast<uint16_t>((x - offset) * static_cast<float>((1 << bits) - 1) / span);
+    static uint16_t float_to_uint(float value, float minimum, float maximum, uint8_t bits) noexcept {
+        value = clampFinite(value, minimum, maximum);
+
+        const float span = maximum - minimum;
+        const uint32_t raw_max =
+            (uint32_t{1U} << bits) - uint32_t{1U};
+
+        return static_cast<uint16_t>(
+            (value - minimum) *
+            static_cast<float>(raw_max) / span);
     }
 
-    //强制结构体按照uint64_t对齐，因为要用std::bit_cast转换为uint64_t
-    struct alignas(uint64_t) DmMotorFeedback {
-        uint8_t data[8];
-        uint8_t ID() const {return (data[0] >> 4) & 0x0f;}
-        uint8_t ERR() const{return (data[0] & 0x0f);}
-        uint16_t Pos() const{return (data[1] << 8) | data[2];}
-        uint16_t Vel() const{return (data[3] << 4) | data[4] >> 4;}
-        uint16_t Tor() const{return ((data[4] & 0x0f)<< 8) | data[5];}
-        uint8_t T_MOS() const{return data[6];}
-        uint8_t T_Rotor() const{return data[7];}
-    };
-    
-    std::atomic<uint64_t> can_data_ = 0;
-    uint8_t ERR;
-    float Angle;
-    float VEL;
-    float TOR;
-    float T_MOS;
-    float T_Rotor;
-    float reversed_sign;
-    
-    ControlMode control_mode_;
-    float reduction_ratio;
-    float KP_Max;
-    float KD_Max;
-    float Pos_Max;
-    float Vel_Max;
-    float Tor_Max;
-    bool reversed;
-    bool multi_turn_angle_enabled;
-    bool feedback_seen_ = false;
-    std::chrono::steady_clock::time_point last_feedback_time_;
+    messaging::StateTopic<MotorState>& state_topic_;
 
+    uint8_t ERR{0U};
+    float Angle{0.0f};
+    float VEL{0.0f};
+    float TOR{0.0f};
+    float T_MOS{0.0f};
+    float T_Rotor{0.0f};
+    float reversed_sign{1.0f};
+    
+    ControlMode control_mode_{ControlMode::MIT};
+    uint16_t command_id_{0x01U};
+    float reduction_ratio{1.0f};
+    float KP_Max{500.0f};
+    float KD_Max{5.0f};
+    float Pos_Max{12.5f};
+    float Vel_Max{45.0f};
+    float Tor_Max{0.0f};
+    bool reversed{false};
+    bool multi_turn_angle_enabled{false};
 };
 }

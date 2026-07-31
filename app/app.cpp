@@ -30,15 +30,18 @@ bool App::init() noexcept {
     }
 
     platform::rtt::init();
-    LOG_INFO("RTT backend ready, float test = %.3f", 1.234);
 
     if (!robot_.init()) {
         LOG_ERROR("Robot initialization failed");
         return false;
     }
 
+    robot_.armMotorOutputs();
+
     initialized_ = true;
-    LOG_INFO("Robot initialized");
+    LOG_INFO(
+        "Robot initialized; RS01 and DM4310 "
+        "zero-torque streams started");
 
     return true;
 }
@@ -48,37 +51,84 @@ void App::process() noexcept {
         return;
     }
 
-    // 先处理 CAN，DjiMotor 收到反馈后会更新对应的 StateTopic。
+    // 先处理 CAN，设备收到反馈后会更新对应的 StateTopic。
     robot_.processCanRx();
 
     const uint32_t now_ms = platform::nowMs();
+
+    static uint32_t last_test_cmd_ms = 0U;
+    if(static_cast<uint32_t>(now_ms - last_test_cmd_ms) >= 20U){
+        last_test_cmd_ms = now_ms;
+
+        robot_.topics().chassis.vel_cmd.publish(
+            robot::ChassisVelCmd{
+                .vx_m_s = 1.0f,
+                .vy_m_s = 0.0f,
+                .omega_rad_s = 0.0f},
+            now_ms);
+    }
+
+    robot_.processControllers(now_ms);
+
+    if (!robot_.processMotorTx(now_ms)) {
+        LOG_WARN_THROTTLE(
+            1000U,
+            "One or more motor frames failed to queue");
+    }
+
     auto& topics = robot_.topics();
 
     messaging::StateSample<device::MotorState> sample{};
 
-    if (topics.chassis_left_front_state.read(sample)) {
-        const uint32_t age_ms =
-            static_cast<uint32_t>(now_ms - sample.timestamp_ms);
-        const bool online = messaging::isFresh(
-            now_ms, sample.timestamp_ms, 100U);
+    // if (topics.rs01_state.read(sample)) {
+    //     const uint32_t age_ms =
+    //         static_cast<uint32_t>(
+    //             now_ms - sample.timestamp_ms);
+    //     const bool online = messaging::isFresh(
+    //         now_ms, sample.timestamp_ms, 10U);
 
-        LOG_INFO_THROTTLE(
-            200U,
-            "LF(0x201) %s pos=%.3f rad vel=%.3f rad/s "
-            "torque=%.3f Nm temp=%.1f C age=%lu ms",
-            online ? "ONLINE" : "STALE",
-            static_cast<double>(sample.value.position_rad),
-            static_cast<double>(sample.value.velocity_rad_s),
-            static_cast<double>(sample.value.torque_nm),
-            static_cast<double>(sample.value.temperature_c),
-            static_cast<unsigned long>(age_ms));
-    } else {
-        LOG_WARN_THROTTLE(
-            1000U,
-            "LF(0x201) NO_DATA");
-    }
+    //     LOG_INFO_THROTTLE(
+    //         200U,
+    //         "RS01 %s pos=%.3f vel=%.3f "
+    //         "torque=%.3f temp=%.1f faults=0x%02lX age=%lu ms",
+    //         online ? "ONLINE" : "STALE",
+    //         static_cast<double>(sample.value.position_rad),
+    //         static_cast<double>(sample.value.velocity_rad_s),
+    //         static_cast<double>(sample.value.torque_nm),
+    //         static_cast<double>(sample.value.temperature_c),
+    //         static_cast<unsigned long>(sample.value.fault_code),
+    //         static_cast<unsigned long>(age_ms));
+    // } else {
+    //     LOG_WARN_THROTTLE(
+    //         1000U,
+    //         "RS01(motor=0x03 host=0xFD) NO_DATA");
+    // }
 
-    if (topics.chassis_right_front_state.read(sample)) {
+    // if (topics.dm4310_state.read(sample)) {
+    //     const uint32_t age_ms =
+    //         static_cast<uint32_t>(
+    //             now_ms - sample.timestamp_ms);
+    //     const bool online = messaging::isFresh(
+    //         now_ms, sample.timestamp_ms, 10U);
+
+    //     LOG_INFO_THROTTLE(
+    //         200U,
+    //         "DM4310 %s pos=%.3f vel=%.3f "
+    //         "torque=%.3f temp=%.1f fault=0x%02lX age=%lu ms",
+    //         online ? "ONLINE" : "STALE",
+    //         static_cast<double>(sample.value.position_rad),
+    //         static_cast<double>(sample.value.velocity_rad_s),
+    //         static_cast<double>(sample.value.torque_nm),
+    //         static_cast<double>(sample.value.temperature_c),
+    //         static_cast<unsigned long>(sample.value.fault_code),
+    //         static_cast<unsigned long>(age_ms));
+    // } else {
+    //     LOG_WARN_THROTTLE(
+    //         1000U,
+    //         "DM4310(tx=0x01 feedback=0x11) NO_DATA");
+    // }
+
+    if (topics.chassis.right_front.state.read(sample)) {
         const uint32_t age_ms =
             static_cast<uint32_t>(now_ms - sample.timestamp_ms);
         const bool online = messaging::isFresh(
@@ -89,8 +139,8 @@ void App::process() noexcept {
             "RF(0x202) %s pos=%.3f rad vel=%.3f rad/s "
             "torque=%.3f Nm temp=%.1f C age=%lu ms",
             online ? "ONLINE" : "STALE",
-            static_cast<double>(sample.value.position_rad),
-            static_cast<double>(sample.value.velocity_rad_s),
+            static_cast<double>(sample.value.pos_rad),
+            static_cast<double>(sample.value.vel_rad_s),
             static_cast<double>(sample.value.torque_nm),
             static_cast<double>(sample.value.temperature_c),
             static_cast<unsigned long>(age_ms));
@@ -99,79 +149,6 @@ void App::process() noexcept {
             1000U,
             "RF(0x202) NO_DATA");
     }
-
-    if (topics.chassis_right_back_state.read(sample)) {
-        const uint32_t age_ms =
-            static_cast<uint32_t>(now_ms - sample.timestamp_ms);
-        const bool online = messaging::isFresh(
-            now_ms, sample.timestamp_ms, 100U);
-
-        LOG_INFO_THROTTLE(
-            200U,
-            "RB(0x203) %s pos=%.3f rad vel=%.3f rad/s "
-            "torque=%.3f Nm temp=%.1f C age=%lu ms",
-            online ? "ONLINE" : "STALE",
-            static_cast<double>(sample.value.position_rad),
-            static_cast<double>(sample.value.velocity_rad_s),
-            static_cast<double>(sample.value.torque_nm),
-            static_cast<double>(sample.value.temperature_c),
-            static_cast<unsigned long>(age_ms));
-    } else {
-        LOG_WARN_THROTTLE(
-            1000U,
-            "RB(0x203) NO_DATA");
-    }
-
-    if (topics.chassis_left_back_state.read(sample)) {
-        const uint32_t age_ms =
-            static_cast<uint32_t>(now_ms - sample.timestamp_ms);
-        const bool online = messaging::isFresh(
-            now_ms, sample.timestamp_ms, 100U);
-
-        LOG_INFO_THROTTLE(
-            200U,
-            "LB(0x204) %s pos=%.3f rad vel=%.3f rad/s "
-            "torque=%.3f Nm temp=%.1f C age=%lu ms",
-            online ? "ONLINE" : "STALE",
-            static_cast<double>(sample.value.position_rad),
-            static_cast<double>(sample.value.velocity_rad_s),
-            static_cast<double>(sample.value.torque_nm),
-            static_cast<double>(sample.value.temperature_c),
-            static_cast<unsigned long>(age_ms));
-    } else {
-        LOG_WARN_THROTTLE(
-            1000U,
-            "LB(0x204) NO_DATA");
-    }
-    // const auto can2_stats = can2_.stats();
-
-    // FDCAN_ProtocolStatusTypeDef protocol{};
-    // FDCAN_ErrorCountersTypeDef counters{};
-
-    // (void)HAL_FDCAN_GetProtocolStatus(
-    //     &can2_.handle(), &protocol);
-
-    // (void)HAL_FDCAN_GetErrorCounters(
-    //     &can2_.handle(), &counters);
-
-    // LOG_INFO_THROTTLE(
-    //     1000U,
-    //     "CAN2 rx=%lu invalid=%lu drop=%lu sw_hal=%lu "
-    //     "hal=0x%08lX act=0x%02lX lec=%lu "
-    //     "rec=%lu tec=%lu passive=%lu warn=%lu busoff=%lu",
-    //     static_cast<unsigned long>(can2_stats.received_frames),
-    //     static_cast<unsigned long>(can2_stats.invalid_frames),
-    //     static_cast<unsigned long>(can2_stats.dropped_frames),
-    //     static_cast<unsigned long>(can2_stats.hal_error),
-    //     static_cast<unsigned long>(
-    //         HAL_FDCAN_GetError(&can2_.handle())),
-    //     static_cast<unsigned long>(protocol.Activity),
-    //     static_cast<unsigned long>(protocol.LastErrorCode),
-    //     static_cast<unsigned long>(counters.RxErrorCnt),
-    //     static_cast<unsigned long>(counters.TxErrorCnt),
-    //     static_cast<unsigned long>(protocol.ErrorPassive),
-    //     static_cast<unsigned long>(protocol.Warning),
-    //     static_cast<unsigned long>(protocol.BusOff));
 }
 
 void App::onFdcanRxFifo0Interrupt(
