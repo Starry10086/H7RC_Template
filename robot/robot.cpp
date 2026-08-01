@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-namespace librmcs::robot {
+namespace robot {
 
 constexpr ChassisConfig chassis_config{
     .type = ChassisType::Mecanum,
@@ -195,4 +195,4 @@ void Robot::processControllers(uint32_t now_ms) noexcept {
     }
 }
 
-} // namespace librmcs::robot
+} // namespace robot

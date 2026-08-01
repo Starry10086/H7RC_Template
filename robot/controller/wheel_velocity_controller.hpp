@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-namespace librmcs::robot {
+namespace robot {
 
 struct WheelVelControllerConfig{
     double kp{0.0};

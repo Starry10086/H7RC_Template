@@ -1,7 +1,7 @@
 #include "robot/controller/wheel_velocity_controller.hpp"
 #include "robot/chassis/chassis_types.hpp"
 
-namespace librmcs::robot{
+namespace robot{
 
 WheelVelController::WheelVelController(const WheelVelControllerConfig& config,
                                    messaging::CommandTopic<WheelVelTarget>& target_topic,

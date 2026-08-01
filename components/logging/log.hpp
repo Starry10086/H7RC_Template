@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace librmcs::logging {
+namespace logging {
 
 enum class Level : uint8_t {
     Info,
@@ -24,21 +24,21 @@ __attribute__((format(printf, 2, 3)))
 #endif
 void log(Level level, const char* format, ...) noexcept;
 
-} // namespace librmcs::logging
+} // namespace logging
 
 #define LOG_INFO(...)                                                     \
-    ::librmcs::logging::log(::librmcs::logging::Level::Info, __VA_ARGS__)
+    ::logging::log(::logging::Level::Info, __VA_ARGS__)
 
 #define LOG_WARN(...)                                                     \
-    ::librmcs::logging::log(::librmcs::logging::Level::Warn, __VA_ARGS__)
+    ::logging::log(::logging::Level::Warn, __VA_ARGS__)
 
 #define LOG_ERROR(...)                                                    \
-    ::librmcs::logging::log(::librmcs::logging::Level::Error, __VA_ARGS__)
+    ::logging::log(::logging::Level::Error, __VA_ARGS__)
 
 #define LOG_INFO_THROTTLE(PERIOD_MS, ...)                              \
     do {                                                               \
-        static ::librmcs::logging::ThrottleState throttle_state{};     \
-        if (::librmcs::logging::shouldLog(                             \
+        static ::logging::ThrottleState throttle_state{};     \
+        if (::logging::shouldLog(                             \
                 throttle_state,                                       \
                 static_cast<uint32_t>(PERIOD_MS))) {                   \
             LOG_INFO(__VA_ARGS__);                                     \
@@ -47,8 +47,8 @@ void log(Level level, const char* format, ...) noexcept;
 
 #define LOG_WARN_THROTTLE(PERIOD_MS, ...)                              \
     do {                                                               \
-        static ::librmcs::logging::ThrottleState throttle_state{};     \
-        if (::librmcs::logging::shouldLog(                             \
+        static ::logging::ThrottleState throttle_state{};     \
+        if (::logging::shouldLog(                             \
                 throttle_state,                                       \
                 static_cast<uint32_t>(PERIOD_MS))) {                   \
             LOG_WARN(__VA_ARGS__);                                     \

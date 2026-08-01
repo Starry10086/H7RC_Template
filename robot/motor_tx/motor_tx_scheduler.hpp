@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace librmcs::robot::motor_tx{
+namespace robot::motor_tx{
 
 struct MotorTxJob{
     using ProcessFunction = bool (*)(void*, uint32_t) noexcept;

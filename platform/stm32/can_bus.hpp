@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace librmcs::platform{
+namespace platform{
 
 struct CanBusState{
     uint32_t received_frames{0};    // 记录接收到的帧数

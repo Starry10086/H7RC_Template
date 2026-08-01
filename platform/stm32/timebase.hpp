@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-namespace librmcs::platform {
+namespace platform {
 
 uint32_t nowMs() noexcept;
 
-} // namespace librmcs::platform
+} // namespace platform

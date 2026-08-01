@@ -9,7 +9,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace librmcs::device {
+namespace device {
 
 class RsMotor final {
 public:
@@ -545,4 +545,4 @@ private:
         OperatingState::unknown};
 };
 
-} // namespace librmcs::device
+} // namespace device

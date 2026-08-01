@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-namespace librmcs::can{
+namespace can{
 
 enum class IdFormat : uint8_t {
     Standard,

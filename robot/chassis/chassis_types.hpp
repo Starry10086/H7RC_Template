@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace librmcs::robot{
+namespace robot{
 
 enum class ChassisType : uint8_t {
     Mecanum,

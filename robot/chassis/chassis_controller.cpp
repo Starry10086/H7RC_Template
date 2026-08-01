@@ -3,7 +3,7 @@
 
 #include <algorithm>
 
-namespace librmcs::robot{
+namespace robot{
 
 ChassisController::ChassisController(const ChassisConfig& config,
                                    messaging::CommandTopic<ChassisVelCmd>& chassis_cmd,

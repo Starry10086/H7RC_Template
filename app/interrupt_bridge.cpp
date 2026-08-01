@@ -13,5 +13,5 @@ extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef* hfdcan, uint32_t 
         return;
     }
 
-    librmcs::app::instance().onFdcanRxFifo0Interrupt(*hfdcan);
+    app::instance().onFdcanRxFifo0Interrupt(*hfdcan);
 }

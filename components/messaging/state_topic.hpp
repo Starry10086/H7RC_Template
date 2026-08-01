@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace librmcs::messaging {
+namespace messaging {
 
 template<typename T>
 struct StateSample{

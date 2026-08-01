@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace librmcs::robot::motor_tx{
+namespace robot::motor_tx{
 
 struct DjiTxSlot{
     device::DjiMotor* motor{nullptr};

@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace librmcs::app {
+namespace app {
 
 class App final {
 public:
@@ -34,4 +34,4 @@ private:
 
  App& instance() noexcept;
 
-} // namespace librmcs::app
+} // namespace app

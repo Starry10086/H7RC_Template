@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace librmcs::device{
+namespace device{
 
 struct MotorState{
     float pos_rad{0.0f};        // 电机位置，单位：弧度

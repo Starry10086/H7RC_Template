@@ -2,10 +2,10 @@
 
 #include "stm32h7xx_hal.h"
 
-namespace librmcs::platform {
+namespace platform {
 
 uint32_t nowMs() noexcept {
     return HAL_GetTick();
 }
 
-} // namespace librmcs::platform
+} // namespace platform

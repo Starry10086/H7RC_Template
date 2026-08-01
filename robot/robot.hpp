@@ -14,7 +14,7 @@
 
 #include <cstddef>
 
-namespace librmcs::robot{
+namespace robot{
 
 class Robot final{
 public:

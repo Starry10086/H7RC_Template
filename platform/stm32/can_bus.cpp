@@ -23,28 +23,28 @@ namespace {
         }
     }
 
-    bool decodeIdFormat(uint32_t hal_id_type,librmcs::can::IdFormat& format) noexcept {
+    bool decodeIdFormat(uint32_t hal_id_type,can::IdFormat& format) noexcept {
         if (hal_id_type == FDCAN_STANDARD_ID) {
-            format = librmcs::can::IdFormat::Standard;
+            format = can::IdFormat::Standard;
             return true;
         }
 
         if (hal_id_type == FDCAN_EXTENDED_ID) {
-            format = librmcs::can::IdFormat::Extended;
+            format = can::IdFormat::Extended;
             return true;
         }
 
         return false;
     }
 
-    bool decodeFrameKind(uint32_t hal_frame_type,librmcs::can::FrameKind& kind) noexcept {
+    bool decodeFrameKind(uint32_t hal_frame_type,can::FrameKind& kind) noexcept {
         if (hal_frame_type == FDCAN_DATA_FRAME) {
-            kind = librmcs::can::FrameKind::Data;
+            kind = can::FrameKind::Data;
             return true;
         }
 
         if (hal_frame_type == FDCAN_REMOTE_FRAME) {
-            kind = librmcs::can::FrameKind::Remote;
+            kind = can::FrameKind::Remote;
             return true;
         }
 
@@ -68,42 +68,42 @@ namespace {
         }
     }
 
-    bool encodeIdFormat(librmcs::can::IdFormat format,uint32_t& hal_id_format) noexcept {
+    bool encodeIdFormat(can::IdFormat format,uint32_t& hal_id_format) noexcept {
         switch (format) {
-            case librmcs::can::IdFormat::Standard:
+            case can::IdFormat::Standard:
                 hal_id_format = FDCAN_STANDARD_ID;
                 return true;
-            case librmcs::can::IdFormat::Extended:
+            case can::IdFormat::Extended:
                 hal_id_format = FDCAN_EXTENDED_ID;
                 return true;
         }
         return false;
     }
 
-    bool encodeFrameKind(librmcs::can::FrameKind kind,uint32_t& hal_frame_kind) noexcept {
+    bool encodeFrameKind(can::FrameKind kind,uint32_t& hal_frame_kind) noexcept {
         switch (kind) {
-        case librmcs::can::FrameKind::Data:
+        case can::FrameKind::Data:
             hal_frame_kind = FDCAN_DATA_FRAME;
             return true;
-        case librmcs::can::FrameKind::Remote:
+        case can::FrameKind::Remote:
             hal_frame_kind = FDCAN_REMOTE_FRAME;
             return true;
         }
         return false;
     }
 
-    bool isValidCanId(uint32_t id,librmcs::can::IdFormat format) noexcept {
+    bool isValidCanId(uint32_t id,can::IdFormat format) noexcept {
         switch (format) {
-            case librmcs::can::IdFormat::Standard:
+            case can::IdFormat::Standard:
                 return id <= 0x7FFU;
-            case librmcs::can::IdFormat::Extended:
+            case can::IdFormat::Extended:
                 return id <= 0x1FFFFFFFU;
         }
         return false;
     }
 }
 
-namespace librmcs::platform{
+namespace platform{
     bool CanBus::start() noexcept{
         if(started_){
             return true;

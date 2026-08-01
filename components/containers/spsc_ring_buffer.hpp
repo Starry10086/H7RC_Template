@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace librmcs::container{
+namespace container{
 
 template<typename T, std::size_t Capacity>
 class SpscRingBuffer final {

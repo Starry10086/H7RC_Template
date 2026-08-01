@@ -7,7 +7,7 @@
 #include "platform/stm32/timebase.hpp"
 #include "stm32h7xx_hal_fdcan.h"
 
-namespace librmcs::app {
+namespace app {
 
 namespace {
 
@@ -62,7 +62,7 @@ void App::process() noexcept {
 
         robot_.topics().chassis.vel_cmd.publish(
             robot::ChassisVelCmd{
-                .vx_m_s = 1.0f,
+                .vx_m_s = 0.2f,
                 .vy_m_s = 0.0f,
                 .omega_rad_s = 0.0f},
             now_ms);
@@ -166,12 +166,12 @@ App& instance() noexcept {
     return application;
 }
 
-} // namespace librmcs::app
+} // namespace app
 
 extern "C" bool App_Init(void) {
-    return librmcs::app::instance().init();
+    return app::instance().init();
 }
 
 extern "C" void App_Process(void) {
-    librmcs::app::instance().process();
+    app::instance().process();
 }

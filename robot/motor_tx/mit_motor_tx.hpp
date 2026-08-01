@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-namespace librmcs::robot::motor_tx{
+namespace robot::motor_tx{
 
 template<typename Motor>
 class MitMotorTx final{

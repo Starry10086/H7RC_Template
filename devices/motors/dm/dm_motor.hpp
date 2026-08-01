@@ -15,7 +15,7 @@
 @breif DM电机返回的和设置的参数均以经过减速比转换后的输出端参数
 */
 
-namespace librmcs::device {
+namespace device {
 class DmMotor {
 public:
     enum class Type : uint8_t {DM_J4310_2EC,DM_J4340_2EC};

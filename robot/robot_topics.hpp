@@ -7,7 +7,7 @@
 #include "robot/chassis/chassis_types.hpp"
 #include <stdint.h>
 
-namespace librmcs::robot{
+namespace robot{
 
 inline constexpr uint32_t motor_command_timeout_ms = 100U;
 inline constexpr uint32_t chassis_command_timeout_ms = 100U;

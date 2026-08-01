@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string_view>
 
-namespace librmcs::logging {
+namespace logging {
 
 namespace {
 
@@ -107,4 +107,4 @@ bool shouldLog(
     return false;
 }
 
-} // namespace librmcs::logging
+} // namespace logging

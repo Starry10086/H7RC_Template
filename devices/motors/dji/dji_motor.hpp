@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <numbers>
 
-namespace librmcs::device {
+namespace device {
 
 class DjiMotor {
 public:
@@ -219,4 +219,4 @@ private:
     double temperature_;
 };
 
-} // namespace librmcs::device
+} // namespace device

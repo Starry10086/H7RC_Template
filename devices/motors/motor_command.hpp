@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace librmcs::device {
+namespace device {
 
 enum class MotorCommandMode : uint8_t {
     Torque,
@@ -22,7 +22,7 @@ struct MotorCommand {
     float kd{0.0F};
 };
 
-} // namespace librmcs::device
+} // namespace device
 
 // | 电机  | 接受的命令        | 下发方式            | 命令过期         
 // | DJI  | Torque           | 4 个 Topic 合成一帧 | 对应槽位写 0 

@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace librmcs::can{
+namespace can{
 
 struct RouterStats{
     std::size_t bound_routes{0};    // 记录绑定的路由数量

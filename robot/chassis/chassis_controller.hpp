@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdint>
 
-namespace librmcs::robot {
+namespace robot {
 
 class ChassisController final{
 public:

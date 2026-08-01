@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace librmcs::device {
+namespace device {
 
 enum class DjiCommandGroup : uint16_t {
     m3508_m2006_201_to_204 = 0x200U,
@@ -41,4 +41,4 @@ constexpr can::Frame makeDjiCommandFrame(DjiCommandGroup group, const std::array
     return frame;
 }
 
-} // namespace librmcs::device
+} // namespace device

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-namespace librmcs::robot::motor_tx{
+namespace robot::motor_tx{
 
 inline device::MotorCommand readMotorCmd(messaging::CommandTopic<device::MotorCommand>& command_topic,
                                       messaging::StateTopic<device::MotorState>& state_topic,

@@ -9,7 +9,7 @@
 #include <cstring>
 #include <numbers>
 
-namespace librmcs::device{
+namespace device{
 
 class VescMotor {
 public:

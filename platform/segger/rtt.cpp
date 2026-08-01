@@ -2,7 +2,7 @@
 
 #include "SEGGER_RTT.h"
 
-namespace librmcs::platform::rtt {
+namespace platform::rtt {
 
 namespace {
 
@@ -31,4 +31,4 @@ std::size_t write(std::string_view text) noexcept {
     return static_cast<std::size_t>(bytes_written);
 }
 
-} // namespace librmcs::platform::rtt
+} // namespace platform::rtt
