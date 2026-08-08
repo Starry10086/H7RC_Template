@@ -6,23 +6,38 @@
 #include "devices/motors/motor_state.hpp"
 #include "platform/stm32/timebase.hpp"
 #include "stm32h7xx_hal_fdcan.h"
+#include "stm32h7xx_hal_spi.h"
+#include "app/dma_storage.hpp"
+#include "devices/imu/bmi088.hpp"
 
 namespace app {
 
 namespace {
 
-App application{hfdcan1, hfdcan2, hfdcan3};
+const device::Bmi088Config bmi088_config{
+    .accel_chip_select{
+        GPIOC,
+        GPIO_PIN_0,
+        true
+    },
+    .gyro_chip_select{
+        GPIOC,
+        GPIO_PIN_3,
+        true
+    },
+};
+
+App application{};
 
 } // namespace
 
-App::App(FDCAN_HandleTypeDef& can1_handle,
-         FDCAN_HandleTypeDef& can2_handle,
-         FDCAN_HandleTypeDef& can3_handle) noexcept
-    : can1_(can1_handle)
-    , can2_(can2_handle)
-    , can3_(can3_handle)
-    , robot_(can1_, can2_, can3_) {
-}
+App::App() noexcept
+    : robot_(can1_,
+            can2_,
+            can3_, 
+            spi2_, 
+            app::dma_storage::bmi088, 
+            bmi088_config) {}
 
 bool App::init() noexcept {
     if (initialized_) {
@@ -55,6 +70,9 @@ void App::process() noexcept {
     robot_.processCanRx();
 
     const uint32_t now_ms = platform::nowMs();
+
+    spi2_.process(now_ms);
+    robot_.processDevices(now_ms);
 
     static uint32_t last_test_cmd_ms = 0U;
     if(static_cast<uint32_t>(now_ms - last_test_cmd_ms) >= 20U){
@@ -159,6 +177,24 @@ void App::onFdcanRxFifo0Interrupt(
         can2_.onRxFifo0Interrupt();
     } else if (&handle == &can3_.handle()) {
         can3_.onRxFifo0Interrupt();
+    }
+}
+
+void App::onSpiTxRxCompleteInterrupt(SPI_HandleTypeDef& handle) noexcept{
+    if(&handle == &spi2_.handle()){
+        spi2_.onTxRxCompleteInterrupt();
+    }
+}
+
+void App::onSpiErrorInterrupt(SPI_HandleTypeDef& handle) noexcept{
+    if(&handle == &spi2_.handle()){
+        spi2_.onErrorInterrupt();
+    }
+}
+
+void App::onSpiAbortCompleteInterrupt(SPI_HandleTypeDef& handle) noexcept{
+    if(&handle == &spi2_.handle()){
+        spi2_.onAbortCompleteInterrupt();
     }
 }
 

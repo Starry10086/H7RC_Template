@@ -180,6 +180,18 @@ SECTIONS
     __rtt_end__ = .;
   } >RAM_D1
 
+  .dma_buffer (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dma_buffer_start__ = .;
+
+    KEEP(*(.dma_buffer))
+    KEEP(*(.dma_buffer*))
+
+    . = ALIGN(32);
+    __dma_buffer_end__ = .;
+  } >RAM_D2
+
   /* Uninitialized data section */
   . = ALIGN(4);
   .bss :

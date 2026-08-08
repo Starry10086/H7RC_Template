@@ -1,4 +1,5 @@
 #include "robot/robot.hpp"
+#include "devices/imu/bmi088.hpp"
 #include "devices/motors/dji/dji_command_group.hpp"
 #include "devices/motors/dji/dji_motor.hpp"
 #include "devices/motors/dm/dm_motor.hpp"
@@ -32,7 +33,10 @@ constexpr WheelVelControllerConfig wheel_vel_config{
 
 Robot::Robot(platform::CanBus& can1,
              platform::CanBus& can2,
-             platform::CanBus& can3) noexcept
+             platform::CanBus& can3,
+             platform::SpiBus& spi2,
+             device::Bmi088DmaStorage& bmi088_dma,
+             const device::Bmi088Config& bmi088_config) noexcept
     : can1_(can1)
     , can2_(can2)
     , can3_(can3)
@@ -62,6 +66,7 @@ Robot::Robot(platform::CanBus& can1,
         0x01U}.set_control_mode(
         device::DmMotor::ControlMode::MIT),
         topics_.dm4310.state}
+    , bmi088_{spi2, bmi088_config, bmi088_dma, topics_.imu_state}
     , chassis_controller_{
         chassis_config,
         topics_.chassis.vel_cmd,
@@ -144,6 +149,8 @@ bool Robot::init() noexcept {
     can2_.start();
     can3_.start();
 
+    bmi088_.init();
+
     return true;
 }
 
@@ -168,16 +175,16 @@ void Robot::processCanBus(platform::CanBus& bus,
     }
 }
 
-void Robot::sendAllZeroCommands() noexcept{
-    chassis_dji_tx_.sendZero();
-    rs01_tx.sendZero();
-    dm4310_tx_.sendZero();
-}
-
 void Robot::processCanRx() noexcept {
     processCanBus(can1_, can1_router_);
     processCanBus(can2_, can2_router_);
     processCanBus(can3_, can3_router_);
+}
+
+void Robot::sendAllZeroCommands() noexcept{
+    chassis_dji_tx_.sendZero();
+    rs01_tx.sendZero();
+    dm4310_tx_.sendZero();
 }
 
 void Robot::armMotorOutputs() noexcept {
@@ -193,6 +200,10 @@ void Robot::processControllers(uint32_t now_ms) noexcept {
     for (auto& controller : wheel_vel_controllers_) {
         controller.process(now_ms);
     }
+}
+
+void Robot::processDevices(uint32_t now_ms) noexcept {
+    bmi088_.process(now_ms);
 }
 
 } // namespace robot

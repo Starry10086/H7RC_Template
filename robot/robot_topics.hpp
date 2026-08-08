@@ -5,6 +5,7 @@
 #include "devices/motors/motor_state.hpp"
 #include "devices/motors/motor_command.hpp"
 #include "robot/chassis/chassis_types.hpp"
+#include "devices/imu/imu_state.hpp"
 #include <stdint.h>
 
 namespace robot{
@@ -60,5 +61,7 @@ struct RobotTopics{
         .state{"motor.dm4310.state"},
         .command{"motor.dm4310.command", motor_command_timeout_ms}
     };
+
+    messaging::StateTopic<device::ImuState> imu_state{"imu.bmi088.state"};
 };
 }

@@ -15,3 +15,27 @@ extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef* hfdcan, uint32_t 
 
     app::instance().onFdcanRxFifo0Interrupt(*hfdcan);
 }
+
+extern "C" void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef* hspi){
+    if(hspi == nullptr){
+        return;
+    }
+
+    app::instance().onSpiTxRxCompleteInterrupt(*hspi);
+}
+
+extern "C" void HAL_SPI_ErrorCallback(SPI_HandleTypeDef* hspi){
+    if(hspi == nullptr){
+        return;
+    }
+
+    app::instance().onSpiErrorInterrupt(*hspi);
+}
+
+extern "C" void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef* hspi){
+    if(hspi == nullptr){
+        return;
+    }
+
+    app::instance().onSpiAbortCompleteInterrupt(*hspi);
+}

@@ -11,6 +11,7 @@
 #include "robot/motor_tx/dji_group_tx.hpp"
 #include "robot/motor_tx/mit_motor_tx.hpp"
 #include "robot/motor_tx/motor_tx_scheduler.hpp"
+#include "devices/imu/bmi088.hpp"
 
 #include <cstddef>
 
@@ -20,7 +21,10 @@ class Robot final{
 public:
     Robot(platform::CanBus& can1,
           platform::CanBus& can2,
-          platform::CanBus& can3) noexcept;
+          platform::CanBus& can3,
+          platform::SpiBus& spi2,
+          device::Bmi088DmaStorage& bmi088_dma,
+          const device::Bmi088Config& bmi088_config) noexcept;
 
     Robot(const Robot&) = delete;
     Robot& operator=(const Robot&) = delete;
@@ -29,6 +33,7 @@ public:
     void processCanRx() noexcept;
     bool processMotorTx(uint32_t now_ms) noexcept;
     void processControllers(uint32_t now_ms) noexcept;
+    void processDevices(uint32_t now_ms) noexcept;
 
     void armMotorOutputs() noexcept;
 
@@ -52,6 +57,8 @@ private:
     std::array<device::DjiMotor, 4> chassis_motors_;         // lf，rf，rb，lb
     device::RsMotor rs01_;
     device::DmMotor dm4310_;
+
+    device::Bmi088 bmi088_;
     
     ChassisController chassis_controller_;
     std::array<WheelVelController, 4> wheel_vel_controllers_;// lf，rf，rb，lb
