@@ -72,6 +72,7 @@ void App::process() noexcept {
     const uint32_t now_ms = platform::nowMs();
 
     spi2_.process(now_ms);
+    i2c2_.process(now_ms);
     robot_.processDevices(now_ms);
 
     static uint32_t last_test_cmd_ms = 0U;
@@ -195,6 +196,24 @@ void App::onSpiErrorInterrupt(SPI_HandleTypeDef& handle) noexcept{
 void App::onSpiAbortCompleteInterrupt(SPI_HandleTypeDef& handle) noexcept{
     if(&handle == &spi2_.handle()){
         spi2_.onAbortCompleteInterrupt();
+    }
+}
+
+void App::onI2cTransferCompleteInterrupt(I2C_HandleTypeDef& handle) noexcept{
+    if(&handle == &i2c2_.handle()){
+        i2c2_.onTransferCompleteInterrupt();
+    }
+}
+
+void App::onI2cErrorInterrupt(I2C_HandleTypeDef& handle) noexcept{
+    if(&handle == &i2c2_.handle()){
+        i2c2_.onErrorInterrupt();
+    }
+}
+
+void App::onI2cAbortCompleteInterrupt(I2C_HandleTypeDef& handle) noexcept{
+    if(&handle == &i2c2_.handle()){
+        i2c2_.onAbortCompleteInterrupt();
     }
 }
 

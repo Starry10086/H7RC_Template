@@ -20,7 +20,9 @@
 #include "main.h"
 #include "dma.h"
 #include "fdcan.h"
+#include "i2c.h"
 #include "spi.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -98,6 +100,8 @@ int main(void)
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
+  MX_I2C2_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   if(!App_Init()){
       Error_Handler();

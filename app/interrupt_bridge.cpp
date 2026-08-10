@@ -1,6 +1,7 @@
 #include "app/app.hpp"
 
 #include "stm32h7xx_hal_fdcan.h"
+#include "stm32h7xx_hal_i2c.h"
 
 #include <cstdint>
 
@@ -38,4 +39,52 @@ extern "C" void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef* hspi){
     }
 
     app::instance().onSpiAbortCompleteInterrupt(*hspi);
+}
+
+extern "C" void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef* hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cTransferCompleteInterrupt(*hi2c);
+}
+
+extern "C" void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef* hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cTransferCompleteInterrupt(*hi2c);
+}
+
+extern "C" void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cTransferCompleteInterrupt(*hi2c);
+}
+
+extern "C" void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cTransferCompleteInterrupt(*hi2c);
+}
+
+extern "C" void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cErrorInterrupt(*hi2c);
+}
+
+extern "C" void HAL_I2C_AbortCpltCallback(I2C_HandleTypeDef *hi2c){
+    if(hi2c == nullptr){
+        return;
+    }
+
+    app::instance().onI2cAbortCompleteInterrupt(*hi2c);
 }

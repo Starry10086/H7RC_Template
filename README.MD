@@ -186,6 +186,131 @@ gyro_rad_s：rad/s
 
 状态数据通过 `messaging::StateTopic<device::ImuState>` 保存最新值。日志、姿态估计器和其他控制逻辑都从 Topic 读取，不直接访问 BMI088 的 DMA 缓冲区。
 
+## I2C 总线框架
+
+I2C 与 SPI 使用相同的异步事务思想：设备驱动描述“要访问哪个设备、执行什么操作”，`I2cBus` 负责排队、启动 DMA、处理超时和完成事件。设备驱动不直接调用 HAL，也不在提交后阻塞等待。
+
+```text
+设备准备长期存在的 I2cTransfer
+  -> I2cDevice::memoryRead()/memoryWrite()
+  -> I2cBus::submit()
+  -> 参数、7 位地址和 DMA 地址检查
+  -> 固定容量指针队列（默认 8 项）
+  -> I2cBus::startNext()
+  -> 当前事务变为 Active
+  -> HAL_I2C_*_DMA()
+  -> CPU 继续执行主循环
+  -> HAL I2C DMA 完成中断
+  -> interrupt_bridge 只转发 Complete/Error/AbortComplete
+  -> I2cBus::process()
+  -> 事务变为 Completed/Failed/TimedOut
+  -> 设备 process() 解析 RX 缓冲区并发布 StateTopic
+```
+
+### I2C 框架的职责
+
+`I2cBus` 表示一条物理 I2C 总线，是该总线唯一的 DMA 调度器：
+
+- 同一时间只允许一个事务处于 `Active`。
+- 队列只保存长期存在的 `I2cTransfer*`，不复制事务和数据。
+- 根据事务类型选择对应的 HAL DMA 接口。
+- 在主循环中处理完成、HAL 错误、超时及下一笔事务。
+- 超时后使用 `HAL_I2C_Master_Abort_IT()` 异步中止。
+- 记录完成、失败、超时和队列拒绝次数。
+
+事务状态与 SPI 相同：
+
+```text
+Idle -> Queued -> Active -> Completed/Failed/TimedOut/Aborted
+                                                |
+                                             reset()
+                                                |
+                                              Idle
+```
+
+`I2cDevice` 表示挂在总线上的一个从设备，只保存总线引用和 7 位设备地址：
+
+```cpp
+platform::I2cBus i2c1{hi2c1};
+platform::I2cDevice sensor{i2c1, 0x68U};
+```
+
+框架支持四类事务：
+
+| 操作 | 设备接口 | HAL DMA 接口 | 用途 |
+| --- | --- | --- | --- |
+| 主机发送 | `masterTransmit()` | `HAL_I2C_Master_Transmit_DMA()` | 发送设备自定义数据帧 |
+| 主机接收 | `masterReceive()` | `HAL_I2C_Master_Receive_DMA()` | 接收无寄存器地址的数据 |
+| 寄存器写入 | `memoryWrite()` | `HAL_I2C_Mem_Write_DMA()` | 向 8/16 位寄存器地址写数据 |
+| 寄存器读取 | `memoryRead()` | `HAL_I2C_Mem_Read_DMA()` | 从 8/16 位寄存器地址读取数据 |
+
+框架内部统一保存数据手册中的 7 位地址。例如设备地址是 `0x68`，构造时必须传 `0x68`，不能传已经左移的 `0xD0`。`I2cBus` 调用 HAL 前会自动执行：
+
+```cpp
+hal_address = static_cast<uint16_t>(device_address_7bit << 1U);
+```
+
+### 如何使用 I2C 框架
+
+一个 I2C 设备驱动通常持有：
+
+```text
+I2cDevice（总线 + 7 位地址）
+DMA Storage 引用
+I2cTransfer（长期存在）
+设备自己的非阻塞状态机
+```
+
+以读取设备的 `WHO_AM_I` 寄存器为例，驱动先在 `Ready` 状态提交事务：
+
+```cpp
+if (device_.memoryRead(
+        transfer_,
+        who_am_i_register,
+        platform::I2cMemoryAddressSize::Bits8,
+        dma_.rx.data(),
+        1U,
+        transfer_timeout_ms)) {
+    state_ = State::WhoAmIWait;
+}
+```
+
+提交成功只表示事务已经进入队列，并不表示数据已经读回。后续主循环不断调用 `i2c1.process(now_ms)`，设备驱动在自己的 `process()` 中检查结果：
+
+```cpp
+if (state_ == State::WhoAmIWait &&
+    transfer_.state == platform::TransferState::Completed) {
+    chip_id_ = dma_.rx[0];
+    transfer_.reset();
+    state_ = State::Ready;
+}
+```
+
+如果状态为 `Failed`、`TimedOut` 或 `Aborted`，设备驱动应记录故障，然后调用 `reset()`，按自身策略重试或进入故障状态。不能在 `Queued` 或 `Active` 时修改 DMA 缓冲区、调用 `reset()` 或重复提交同一个事务。
+
+I2C DMA 缓冲区与 SPI 遵循相同规则：必须长期存在、位于 `.dma_buffer`、由 DMA 可访问，并在事务结束前保持有效。I2C 不需要 RingBuffer，因为每一笔读写都有明确的地址、长度和完成边界。
+
+### I2C 中断与接入顺序
+
+接入具体 I2C 实例时，需要把六类 HAL 回调转发给对应的 `I2cBus`：
+
+```text
+MasterTxCplt / MasterRxCplt
+MemTxCplt    / MemRxCplt     -> onTransferCompleteInterrupt()
+Error                         -> onErrorInterrupt()
+AbortCplt                     -> onAbortCompleteInterrupt()
+```
+
+回调只记录事件，不能解析寄存器数据或发布 Topic。主循环顺序应为：
+
+```text
+SpiBus::process(now_ms)
+I2cBus::process(now_ms)
+Robot::processDevices(now_ms)
+```
+
+这样总线先把事务更新为终态，设备状态机在同一轮主循环就能看到结果并解析数据。当前仓库已经包含通用 `I2cBus` 和 `I2cDevice`，但尚未由 CubeMX 生成并绑定具体 I2C 实例，也没有 I2C 设备接入 `Robot`；接入硬件后还需补充 DMA、NVIC、中断桥接和设备驱动。
+
 ## 底盘命令数据流
 
 ```text
