@@ -1,11 +1,14 @@
 #include "robot/robot.hpp"
 #include "devices/imu/bmi088.hpp"
+#include "devices/laser/MTL1.hpp"
+#include "devices/laser/stp23.hpp"
 #include "devices/motors/dji/dji_command_group.hpp"
 #include "devices/motors/dji/dji_motor.hpp"
 #include "devices/motors/dm/dm_motor.hpp"
 #include "devices/motors/robostride/rs_motor.hpp"
 #include "platform/can/can_types.hpp"
 #include "platform/stm32/can_bus.hpp"
+#include "platform/stm32/uart_port.hpp"
 #include "robot/chassis/chassis_types.hpp"
 #include "robot/controller/wheel_velocity_controller.hpp"
 
@@ -35,8 +38,10 @@ Robot::Robot(platform::CanBus& can1,
              platform::CanBus& can2,
              platform::CanBus& can3,
              platform::SpiBus& spi2,
+             platform::UartPort& uart10,
              device::Bmi088DmaStorage& bmi088_dma,
-             const device::Bmi088Config& bmi088_config) noexcept
+             const device::Bmi088Config& bmi088_config,
+             const device::MTL1Config& mtl1_config) noexcept
     : can1_(can1)
     , can2_(can2)
     , can3_(can3)
@@ -67,6 +72,7 @@ Robot::Robot(platform::CanBus& can1,
         device::DmMotor::ControlMode::MIT),
         topics_.dm4310.state}
     , bmi088_{spi2, bmi088_config, bmi088_dma, topics_.imu_state}
+    , mtl1_{uart10, topics_.mtl1_distance, mtl1_config}
     , chassis_controller_{
         chassis_config,
         topics_.chassis.vel_cmd,
@@ -150,6 +156,7 @@ bool Robot::init() noexcept {
     can3_.start();
 
     bmi088_.init();
+    mtl1_.init();
 
     return true;
 }
@@ -204,6 +211,7 @@ void Robot::processControllers(uint32_t now_ms) noexcept {
 
 void Robot::processDevices(uint32_t now_ms) noexcept {
     bmi088_.process(now_ms);
+    mtl1_.process(now_ms);
 }
 
 } // namespace robot

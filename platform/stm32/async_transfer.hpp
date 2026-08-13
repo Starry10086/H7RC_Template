@@ -11,7 +11,6 @@ enum class TransferState : uint8_t {
     Completed,  // 传输已完成
     Failed,     // 传输失败
     TimedOut,   // 传输超时
-    Aborted     // 传输被中止
 };
 
 enum class TransferError : uint8_t {
@@ -30,7 +29,16 @@ constexpr bool isTransferPending(TransferState state) noexcept{
 
 constexpr bool isTransferTerminal(TransferState state) noexcept{
     return state == TransferState::Completed || state == TransferState::Failed ||
-           state == TransferState::TimedOut || state == TransferState::Aborted;
+           state == TransferState::TimedOut;
+}
+
+constexpr bool isTransferSuccessful(TransferState state) noexcept {
+    return state == TransferState::Completed;
+}
+
+constexpr bool isTransferUnsuccessful(TransferState state) noexcept {
+    return state == TransferState::Failed ||
+           state == TransferState::TimedOut;
 }
 
 struct TransferStats{
@@ -45,7 +53,7 @@ struct TransferStats{
 Idle
   -> Queued
   -> Active
-  -> Completed / Failed / TimedOut / Aborted
+  -> Completed / Failed / TimedOut
   -> reset()
   -> Idle
 

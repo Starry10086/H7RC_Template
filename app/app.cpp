@@ -1,5 +1,6 @@
 #include "app/app.hpp"
 #include "app/app_entry.h"
+#include "devices/laser/MTL1.hpp"
 #include "platform/segger/rtt.hpp"
 #include "components/logging/log.hpp"
 #include "components/messaging/state_topic.hpp"
@@ -27,6 +28,12 @@ const device::Bmi088Config bmi088_config{
     },
 };
 
+
+const device::MTL1Config mtl1_config{
+    .rx_budget_bytes = 512U,
+    .offline_timeout_ms = 100U,
+};
+
 App application{};
 
 } // namespace
@@ -36,8 +43,10 @@ App::App() noexcept
             can2_,
             can3_, 
             spi2_, 
+            uart10_,
             app::dma_storage::bmi088, 
-            bmi088_config) {}
+            bmi088_config,
+            mtl1_config) {}
 
 bool App::init() noexcept {
     if (initialized_) {
@@ -45,6 +54,10 @@ bool App::init() noexcept {
     }
 
     platform::rtt::init();
+    if (!uart10_.init()) {
+        LOG_ERROR("UART10 initialization failed");
+        return false;
+    }
 
     if (!robot_.init()) {
         LOG_ERROR("Robot initialization failed");
@@ -73,6 +86,7 @@ void App::process() noexcept {
 
     spi2_.process(now_ms);
     i2c2_.process(now_ms);
+    uart10_.process(now_ms);
     robot_.processDevices(now_ms);
 
     static uint32_t last_test_cmd_ms = 0U;
@@ -97,8 +111,35 @@ void App::process() noexcept {
 
     auto& topics = robot_.topics();
 
-    messaging::StateSample<device::MotorState> sample{};
+    messaging::StateSample<device::MotorState> motor_sample{};
+    messaging::StateSample<device::LaserDistance> laser_sample{};
 
+    if (topics.mtl1_distance.read(laser_sample)) {
+        const uint32_t age_ms =
+            static_cast<uint32_t>(
+                now_ms - laser_sample.timestamp_ms);
+
+        const bool online = messaging::isFresh(
+            now_ms,
+            laser_sample.timestamp_ms,
+            100U);
+
+        const double distance_m =
+            static_cast<double>(
+                laser_sample.value.distance_mm) /
+            1000.0;
+
+        LOG_INFO_THROTTLE(
+            200U,
+            "MTL1 %s distance=%.3f m age=%lu ms",
+            online ? "ONLINE" : "STALE",
+            distance_m,
+            static_cast<unsigned long>(age_ms));
+    } else {
+        LOG_WARN_THROTTLE(
+            1000U,
+            "MTL1 NO_DATA");
+    }
     // if (topics.rs01_state.read(sample)) {
     //     const uint32_t age_ms =
     //         static_cast<uint32_t>(
@@ -147,21 +188,21 @@ void App::process() noexcept {
     //         "DM4310(tx=0x01 feedback=0x11) NO_DATA");
     // }
 
-    if (topics.chassis.right_front.state.read(sample)) {
+    if (topics.chassis.right_front.state.read(motor_sample)) {
         const uint32_t age_ms =
-            static_cast<uint32_t>(now_ms - sample.timestamp_ms);
+            static_cast<uint32_t>(now_ms - motor_sample.timestamp_ms);
         const bool online = messaging::isFresh(
-            now_ms, sample.timestamp_ms, 100U);
+            now_ms, motor_sample.timestamp_ms, 100U);
 
         LOG_INFO_THROTTLE(
             200U,
             "RF(0x202) %s pos=%.3f rad vel=%.3f rad/s "
             "torque=%.3f Nm temp=%.1f C age=%lu ms",
             online ? "ONLINE" : "STALE",
-            static_cast<double>(sample.value.pos_rad),
-            static_cast<double>(sample.value.vel_rad_s),
-            static_cast<double>(sample.value.torque_nm),
-            static_cast<double>(sample.value.temperature_c),
+            static_cast<double>(motor_sample.value.pos_rad),
+            static_cast<double>(motor_sample.value.vel_rad_s),
+            static_cast<double>(motor_sample.value.torque_nm),
+            static_cast<double>(motor_sample.value.temperature_c),
             static_cast<unsigned long>(age_ms));
     } else {
         LOG_WARN_THROTTLE(
@@ -217,16 +258,43 @@ void App::onI2cAbortCompleteInterrupt(I2C_HandleTypeDef& handle) noexcept{
     }
 }
 
+void App::onUartRxEventInterrupt(UART_HandleTypeDef& handle, uint16_t dma_position) noexcept {
+    if (&handle == &uart10_.handle()) {
+        uart10_.onRxEventInterrupt(dma_position);
+    }
+}
+
+void App::onUartTxCompleteInterrupt(UART_HandleTypeDef& handle) noexcept {
+    // if (&handle == &uart1_.handle()) {
+    //     uart1_.onTxCompleteInterrupt();
+    // }
+}
+
+void App::onUartErrorInterrupt(UART_HandleTypeDef& handle, uint32_t hal_error) noexcept {
+    if (&handle == &uart10_.handle()) {
+        uart10_.onErrorInterrupt(hal_error);
+    }
+}
+
+void App::onUartTxAbortCompleteInterrupt(UART_HandleTypeDef& handle) noexcept {
+    // if (&handle == &uart1_.handle()) {
+    //     uart1_.onTxAbortCompleteInterrupt();
+    // }
+}
+
 App& instance() noexcept {
     return application;
 }
 
 } // namespace app
 
-extern "C" bool App_Init(void) {
-    return app::instance().init();
+extern "C" {
+    bool App_Init(void) {
+        return app::instance().init();
+    }
+
+    void App_Process(void) {
+        app::instance().process();
+    }
 }
 
-extern "C" void App_Process(void) {
-    app::instance().process();
-}

@@ -6,6 +6,7 @@
 #include "devices/motors/motor_command.hpp"
 #include "robot/chassis/chassis_types.hpp"
 #include "devices/imu/imu_state.hpp"
+#include "devices/laser/laser_distance.hpp"
 #include <stdint.h>
 
 namespace robot{
@@ -63,5 +64,6 @@ struct RobotTopics{
     };
 
     messaging::StateTopic<device::ImuState> imu_state{"imu.bmi088.state"};
+    messaging::StateTopic<device::LaserDistance> mtl1_distance{"mtl1.distance.state"};
 };
 }

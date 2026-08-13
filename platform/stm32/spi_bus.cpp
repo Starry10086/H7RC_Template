@@ -46,10 +46,10 @@ namespace platform{
     }
 
     void SpiBus::process(uint32_t now_ms) noexcept{
-        const auto event = static_cast<SpiEvent>(event_.exchange(static_cast<uint8_t>(SpiEvent::None),std::memory_order_acq_rel));
+        const uint32_t events = pending_events_.exchange(0U, std::memory_order_acq_rel);
 
-        if(active_transfer_ != nullptr && event != SpiEvent::None){
-            finishActive(event);
+        if(active_transfer_ != nullptr && events != 0U){
+            handleEvents(events);
         }
         if(active_transfer_ != nullptr){
             processActive(now_ms);
@@ -70,7 +70,7 @@ namespace platform{
         active_transfer_->state = TransferState::Active;
         active_transfer_->start_time_ms = now_ms;
         active_transfer_->error = TransferError::None;
-        abort_requested_ = false;
+        abort_reason_ = AbortReason::None;
         active_transfer_->chip_select.setActive(true);
 
         const HAL_StatusTypeDef result = HAL_SPI_TransmitReceive_DMA(
@@ -82,22 +82,19 @@ namespace platform{
             return;
         }
 
-        active_transfer_->chip_select.setActive(false);
-        active_transfer_->error = result == HAL_BUSY ? TransferError::HalBusy : TransferError::HalError;
-
-        active_transfer_->state = TransferState::Failed;
-        active_transfer_ = nullptr;
-        ++stats_.failed;
+        endActive(TransferState::Failed, result == HAL_BUSY ? TransferError::HalBusy : TransferError::HalError);
     }
 
     void SpiBus::processActive(uint32_t now_ms) noexcept{
-        if(active_transfer_ == nullptr ||
-           abort_requested_){
+        if(active_transfer_ == nullptr){
+            return;
+        }
+        if(abort_reason_ != AbortReason::None){
             return;
         }
 
         const uint32_t elapsed_ms = static_cast<uint32_t>(now_ms - active_transfer_->start_time_ms);
-        if(elapsed_ms <= active_transfer_->timeout_ms){
+        if(elapsed_ms < active_transfer_->timeout_ms){
             return;
         }
 
@@ -105,72 +102,95 @@ namespace platform{
     }
 
     void SpiBus::timeoutActive() noexcept{
-        if (active_transfer_ == nullptr) {
+        if (active_transfer_ == nullptr || abort_reason_ != AbortReason::None) {
             return;
         }
 
         active_transfer_->chip_select.setActive(false);
-        abort_requested_ = true;
+        abort_reason_ = AbortReason::Timeout;
 
         const HAL_StatusTypeDef result = HAL_SPI_Abort_IT(&handle_);
         if (result == HAL_OK) {
             return;
         }
 
-        active_transfer_->error = TransferError::Timeout;
-        active_transfer_->state = TransferState::TimedOut;
-        active_transfer_ = nullptr;
-        abort_requested_ = false;
-        ++stats_.timed_out;
+        endActive(TransferState::TimedOut, TransferError::Timeout);
     }
 
-    void SpiBus::finishActive(SpiEvent event) noexcept{
+    void SpiBus::handleEvents(uint32_t event) noexcept{
+        if(active_transfer_ == nullptr){
+            return;
+        }
+
+        const bool complete = (event & event_complete) != 0U;
+        const bool error = (event & event_error) != 0U;
+        const bool abort_complete = (event & event_abort_complete) != 0U;
+
+        if(abort_reason_ == AbortReason::Timeout){
+            if(abort_complete){
+                endActive(TransferState::TimedOut, TransferError::Timeout);
+            }
+            // 超时中止过程中必须等待 AbortComplete，不能因为中间 Error 提前启动下一笔事务。
+            return;
+        }
+
+        if(error){
+            endActive(TransferState::Failed, TransferError::HalError);
+            return;
+        }
+        if(abort_complete){
+            endActive(TransferState::Failed, TransferError::HalError);
+            return;
+        }
+        if(complete){
+            endActive(TransferState::Completed, TransferError::None);
+        }
+    }
+
+    void SpiBus::endActive(TransferState state, TransferError error) noexcept{
         if(active_transfer_ == nullptr){
             return;
         }
 
         active_transfer_->chip_select.setActive(false);
+        active_transfer_->state = state;
+        active_transfer_->error = error;
 
-        switch(event){
-            case SpiEvent::Complete:
-                active_transfer_->state = TransferState::Completed;
-                active_transfer_->error = TransferError::None;
+        switch(state){
+            case TransferState::Completed:
                 ++stats_.completed;
             break;
-            case SpiEvent::Error:
-                active_transfer_->state = abort_requested_ ? TransferState::TimedOut : TransferState::Failed;
-                active_transfer_->error = abort_requested_ ? TransferError::Timeout : TransferError::HalError;
-                abort_requested_ ? ++stats_.timed_out : ++stats_.failed;
+            case TransferState::Failed:
+                ++stats_.failed;
             break;
-            case SpiEvent::AbortComplete:
-                active_transfer_->state = abort_requested_ ? TransferState::TimedOut : TransferState::Aborted;
-                active_transfer_->error = abort_requested_ ? TransferError::Timeout : TransferError::HalError;
-                abort_requested_ ? ++stats_.timed_out : ++stats_.failed;
+            case TransferState::TimedOut:
+                ++stats_.timed_out;
             break;
-            case SpiEvent::None:
-            return;
+            default:
+                // 其他状态不应该在 endActive() 中出现
+            break;
         }
 
         active_transfer_ = nullptr;
-        abort_requested_ = false;
+        abort_reason_ = AbortReason::None;
     }
 
     void SpiBus::onTxRxCompleteInterrupt() noexcept{
         if(active_transfer_ != nullptr){
             active_transfer_->chip_select.setActive(false);
         }
-        event_.store(static_cast<uint8_t>(SpiEvent::Complete),std::memory_order_release);
+        pending_events_.fetch_or(event_complete,std::memory_order_release);
     }
     void SpiBus::onErrorInterrupt() noexcept{
         if(active_transfer_ != nullptr){
             active_transfer_->chip_select.setActive(false);
         }
-        event_.store(static_cast<uint8_t>(SpiEvent::Error),std::memory_order_release);
+        pending_events_.fetch_or(event_error,std::memory_order_release);
     }
     void SpiBus::onAbortCompleteInterrupt() noexcept{
         if(active_transfer_ != nullptr){
             active_transfer_->chip_select.setActive(false);
         }
-        event_.store(static_cast<uint8_t>(SpiEvent::AbortComplete),std::memory_order_release);
+        pending_events_.fetch_or(event_abort_complete,std::memory_order_release);
     }
 }

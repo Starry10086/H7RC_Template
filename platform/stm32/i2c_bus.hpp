@@ -69,13 +69,6 @@ namespace platform{
         }
     };
 
-    enum class I2cEvent : uint8_t{
-        None,
-        Complete,
-        Error,
-        AbortComplete
-    };
-
 class I2cBus final{
 public:
     static constexpr std::size_t queue_capacity = 8U;
@@ -101,9 +94,19 @@ public:
     }
 
 private:
+    enum class AbortReason : uint8_t{
+        None,
+        Timeout
+    };
+
+    static constexpr uint32_t event_complete = 1UL << 0U;
+    static constexpr uint32_t event_error = 1UL << 1U;
+    static constexpr uint32_t event_abort_complete = 1UL << 2U;
+
     void startNext(uint32_t now_ms) noexcept;
     void processActive(uint32_t now_ms) noexcept;
-    void finishActive(I2cEvent event) noexcept;
+    void handleEvents(uint32_t events) noexcept;
+    void endActive(TransferState state, TransferError error) noexcept;
     void timeoutActive() noexcept;
 
     static bool validMemoryAddressSize(I2cMemoryAddressSize size) noexcept;
@@ -113,8 +116,8 @@ private:
 
     container::FixedPointerQueue<I2cTransfer, queue_capacity> transfer_queue_;  // 最多存queue_capacity条事务
     I2cTransfer* active_transfer_{nullptr};
-    std::atomic<uint8_t> event_{static_cast<uint8_t>(I2cEvent::None)};
-    bool abort_requested_{false};
+    std::atomic<uint32_t> pending_events_{0U};
+    AbortReason abort_reason_{AbortReason::None};
     TransferStats stats_{};
 };
 }

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "devices/laser/MTL1.hpp"
 #include "devices/motors/dji/dji_motor.hpp"
 #include "devices/motors/dm/dm_motor.hpp"
 #include "devices/motors/robostride/rs_motor.hpp"
 #include "platform/can/can_router.hpp"
 #include "platform/stm32/can_bus.hpp"
+#include "platform/stm32/uart_port.hpp"
 #include "robot/robot_topics.hpp"
 #include "robot/chassis/chassis_controller.hpp"
 #include "robot/controller/wheel_velocity_controller.hpp"
@@ -23,8 +25,10 @@ public:
           platform::CanBus& can2,
           platform::CanBus& can3,
           platform::SpiBus& spi2,
+          platform::UartPort& uart10,
           device::Bmi088DmaStorage& bmi088_dma,
-          const device::Bmi088Config& bmi088_config) noexcept;
+          const device::Bmi088Config& bmi088_config,
+          const device::MTL1Config& mtl1_config) noexcept;
 
     Robot(const Robot&) = delete;
     Robot& operator=(const Robot&) = delete;
@@ -59,6 +63,7 @@ private:
     device::DmMotor dm4310_;
 
     device::Bmi088 bmi088_;
+    device::MTL1 mtl1_;
     
     ChassisController chassis_controller_;
     std::array<WheelVelController, 4> wheel_vel_controllers_;// lf，rf，rb，lb

@@ -65,10 +65,10 @@ namespace{
     }
 
     void I2cBus::process(uint32_t now_ms) noexcept{
-        const I2cEvent event = static_cast<I2cEvent>(event_.exchange(static_cast<uint8_t>(I2cEvent::None),std::memory_order_acq_rel));
+        const uint32_t events = pending_events_.exchange(0U, std::memory_order_acq_rel);
 
-        if(active_transfer_ != nullptr && event != I2cEvent::None){
-            finishActive(event);
+        if(active_transfer_ != nullptr && events != 0U){
+            handleEvents(events);
         }
         if(active_transfer_ != nullptr){
             processActive(now_ms);
@@ -89,7 +89,7 @@ namespace{
         active_transfer_->state = TransferState::Active;
         active_transfer_->start_time_ms = now_ms;
         active_transfer_->error = TransferError::None;
-        abort_requested_ = false;
+        abort_reason_ = AbortReason::None;
 
         const uint16_t hal_address = toHalDeviceAddress(active_transfer_->device_address_7bit);
 
@@ -134,19 +134,16 @@ namespace{
             return;
         }
 
-        active_transfer_->error = result == HAL_BUSY ? TransferError::HalBusy : TransferError::HalError;
-        active_transfer_->state = TransferState::Failed;
-        active_transfer_ = nullptr;
-        ++stats_.failed;
+        endActive(TransferState::Failed,result == HAL_BUSY ? TransferError::HalBusy : TransferError::HalError);
     }
 
     void I2cBus::processActive(uint32_t now_ms) noexcept{
-        if(active_transfer_ == nullptr || abort_requested_){
+        if(active_transfer_ == nullptr || abort_reason_ != AbortReason::None){
             return;
         }
 
         const uint32_t elapsed_ms = static_cast<uint32_t>(now_ms - active_transfer_->start_time_ms);
-        if(elapsed_ms <= active_transfer_->timeout_ms){
+        if(elapsed_ms < active_transfer_->timeout_ms){
             return;
         }
 
@@ -154,66 +151,90 @@ namespace{
     }
 
     void I2cBus::timeoutActive() noexcept{
-        if(active_transfer_ == nullptr){
+        if(active_transfer_ == nullptr || abort_reason_ != AbortReason::None){
             return;
         }
 
-        abort_requested_ = true;
+        abort_reason_ = AbortReason::Timeout;
 
         const HAL_StatusTypeDef result = HAL_I2C_Master_Abort_IT(&handle_, toHalDeviceAddress(active_transfer_->device_address_7bit));
         if(result == HAL_OK){
             return;
         }
 
-        active_transfer_->error = TransferError::Timeout;
-        active_transfer_->state = TransferState::TimedOut;
-        active_transfer_ = nullptr;
-        abort_requested_ = false;
-        ++stats_.timed_out;
+        endActive(TransferState::TimedOut, TransferError::Timeout);
     }
 
-    void I2cBus::finishActive(I2cEvent event) noexcept{
+    void I2cBus::handleEvents(uint32_t events) noexcept{
         if(active_transfer_ == nullptr){
             return;
         }
 
-        switch(event){
-            case I2cEvent::Complete:
-                active_transfer_->state = TransferState::Completed;
-                active_transfer_->error = TransferError::None;
+        const bool complete = (events & event_complete) != 0U;
+        const bool error = (events & event_error) != 0U;
+        const bool abort_complete = (events & event_abort_complete) != 0U;
+
+        if(abort_reason_ == AbortReason::Timeout){
+            if(abort_complete){
+                endActive(TransferState::TimedOut, TransferError::Timeout);
+            }
+            // 超时中止期间必须等待 AbortComplete，不能因中间 Error 提前启动下一笔事务。
+            return;
+        }
+
+        if(error){
+            endActive(TransferState::Failed, TransferError::HalError);
+            return;
+        }
+
+        if(abort_complete){
+            // 没有发起中止却收到 AbortComplete，说明内部状态异常。
+            endActive(TransferState::Failed, TransferError::HalError);
+            return;
+        }
+
+        if(complete){
+            endActive(TransferState::Completed, TransferError::None);
+        }
+    }
+
+    void I2cBus::endActive(TransferState state, TransferError error) noexcept{
+        if(active_transfer_ == nullptr){
+            return;
+        }
+
+        active_transfer_->state = state;
+        active_transfer_->error = error;
+
+        switch(state){
+            case TransferState::Completed:
                 ++stats_.completed;
             break;
-            case I2cEvent::Error:
-                active_transfer_->state = abort_requested_ ? TransferState::TimedOut : TransferState::Failed;
-                active_transfer_->error = abort_requested_ ? TransferError::Timeout : TransferError::HalError;
-                if (abort_requested_) {
-                    ++stats_.timed_out;
-                } else {
-                    ++stats_.failed;
-                }
+            case TransferState::Failed:
+                ++stats_.failed;
             break;
-            case I2cEvent::AbortComplete:
-                active_transfer_->state = TransferState::TimedOut;
-                active_transfer_->error = TransferError::Timeout;
+            case TransferState::TimedOut:
                 ++stats_.timed_out;
             break;
-            case I2cEvent::None:
-                return;
+            default:
+                // 其他状态不应该在 endActive() 中出现。
+            break;
         }
+
         active_transfer_ = nullptr;
-        abort_requested_ = false;
+        abort_reason_ = AbortReason::None;
     }
 
     void I2cBus::onTransferCompleteInterrupt() noexcept {
-        event_.store(static_cast<uint8_t>(I2cEvent::Complete),std::memory_order_release);
+        pending_events_.fetch_or(event_complete, std::memory_order_release);
     }
 
     void I2cBus::onErrorInterrupt() noexcept {
-        event_.store(static_cast<uint8_t>(I2cEvent::Error),std::memory_order_release);
+        pending_events_.fetch_or(event_error, std::memory_order_release);
     }
 
     void I2cBus::onAbortCompleteInterrupt() noexcept {
-        event_.store(static_cast<uint8_t>(I2cEvent::AbortComplete),std::memory_order_release);
+        pending_events_.fetch_or(event_abort_complete, std::memory_order_release);
     }
 
 

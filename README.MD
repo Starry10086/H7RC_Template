@@ -11,6 +11,7 @@
 - 麦克纳姆轮运动学与四轮速度 PID
 - Topic 消息通道、CAN 路由和固定容量电机发送调度器
 - SPI2 DMA 与 BMI088 六轴 IMU，200 Hz 发布 `ImuState`
+- USART10 circular DMA 与 MTL1 激光测距接收
 
 当前电机均接在 CAN2；驱动和发送节点通过总线引用绑定，后续可调整到其他总线。
 
@@ -29,7 +30,8 @@ third_party/  SEGGER RTT 等第三方代码
 
 ## 核心设计
 
-- 中断只接收 CAN 帧并写入对应总线的 SPSC RingBuffer。
+- CAN RX 中断只搬运帧并写入对应总线的 SPSC RingBuffer。
+- SPI/I2C/UART 中断只搬运 RX 数据或记录完成、错误和中止事件。
 - CAN 帧在主循环中按总线独立路由，设备驱动负责协议解析。
 - `StateTopic<T>` 保存设备最新反馈，`CommandTopic<T>` 保存最新控制命令。
 - Topic 名称仅用于调试和标识，实际连接由 `Robot` 构造时的引用绑定完成。
@@ -311,6 +313,112 @@ Robot::processDevices(now_ms)
 
 这样总线先把事务更新为终态，设备状态机在同一轮主循环就能看到结果并解析数据。当前仓库已经包含通用 `I2cBus` 和 `I2cDevice`，但尚未由 CubeMX 生成并绑定具体 I2C 实例，也没有 I2C 设备接入 `Robot`；接入硬件后还需补充 DMA、NVIC、中断桥接和设备驱动。
 
+## UART 平台框架
+
+UART RX 是持续字节流，TX 是异步事务。`UartPort` 只负责 DMA
+搬运、TX 排队和错误恢复；帧头、长度、CRC、请求应答及 Topic 发布均由
+设备驱动处理。框架不使用动态内存，ISR 只搬运数据或记录事件。
+
+固定资源：RX circular DMA 512 B、RX SPSC 1024 B、TX 指针队列 8 项。
+
+### 数据链路
+
+```text
+RX: UART -> circular DMA -> RxEvent(HT/TC/IDLE)
+    -> UartPort -> SPSC -> 设备解析器 -> Topic
+
+TX: 设备驱动 -> UartTxTransfer -> TX 队列 -> normal DMA
+    -> UART 最终 TC -> Complete -> 下一笔事务
+```
+
+RX 回调的 `Size` 是 DMA 当前写入位置，不是本次接收长度：
+
+```text
+Size > previous: [previous, Size)
+Size < previous: [previous, 512) + [0, Size)
+Size = previous: 无新数据
+```
+
+HAL 可能在 DMA 刚启动或错误恢复后报告 `IDLE + Size=512 + NDTR=512`，
+此时实际收到 0 B。实现必须结合事件类型和 `last_dma_position_` 过滤该事件，
+不能把 `NOLOAD` DMA 缓冲区中的旧内容当作有效数据。
+
+SPSC 满时保留环中旧数据并拒绝新数据；`rx_dropped_bytes` 精确累计被拒绝的
+新字节，`rx_bytes` 只累计成功写入 SPSC 的字节。溢出或 UART 错误后，协议
+解析器必须丢弃半帧并重新搜索帧头、长度和 CRC。
+
+### 配置与接入
+
+`UartPortConfig` 必须与 CubeMX 配置一致：
+
+| 用途 | `UartPortConfig` | HAL Mode | DMA |
+| --- | --- | --- | --- |
+| 传感器接收 | `{true, false}` | `UART_MODE_RX` | RX circular |
+| 仅发送 | `{false, true}` | `UART_MODE_TX` | TX normal |
+| 收发设备 | `{true, true}` | `UART_MODE_TX_RX` | RX circular + TX normal |
+
+RX DMA 存储由应用注入并放入 `.dma_buffer`：
+
+```cpp
+// dma_storage.hpp / dma_storage.cpp
+extern platform::UartDmaStorage uart10;
+DMA_BUFFER platform::UartDmaStorage uart10{};
+
+inline constexpr platform::UartPortConfig rx_only{true, false};
+platform::UartPort uart10_{huart10, dma_storage::uart10, rx_only};
+```
+
+初始化和主循环顺序：
+
+```cpp
+uart10_.init();
+
+uart10_.process(now_ms);       // 先恢复 RX、处理 TX 事件
+robot_.processDevices(now_ms); // 再读取、解析和发布 Topic
+```
+
+中断桥接必须按句柄把以下 HAL 回调转发给对应 `UartPort`：
+
+```text
+HAL_UARTEx_RxEventCallback          -> onRxEventInterrupt(Size)
+HAL_UART_TxCpltCallback             -> onTxCompleteInterrupt()
+HAL_UART_ErrorCallback              -> onErrorInterrupt(ErrorCode)
+HAL_UART_AbortTransmitCpltCallback  -> onTxAbortCompleteInterrupt()
+```
+
+RX-only 端口只需 RX Event 和 Error 路由。启用 TX 时还要配置 TX normal DMA、
+DMA IRQ、USART IRQ以及 TX Complete/Abort Complete 路由。USART IRQ 和 RX DMA
+IRQ 应使用相同抢占优先级，避免两个 RX 回调嵌套修改 DMA 位置。
+
+### 设备驱动用法
+
+RX 设备每轮从软件环批量读取，并设置合理预算，避免高速串口长期占用主循环：
+
+```cpp
+std::array<uint8_t, 128U> bytes{};
+const std::size_t size = uart_.read(bytes.data(), bytes.size());
+for (std::size_t i = 0U; i < size; ++i) {
+    consumeByte(bytes[i], now_ms);
+}
+```
+
+TX 缓冲区和 `UartTxTransfer` 必须属于长期存在的对象。TX 缓冲区还必须位于
+`.dma_buffer`，且在 `Queued/Active` 期间不得修改：
+
+```cpp
+transfer_.config(tx_dma_buffer_.data(), size, 20U);
+if (!uart_.submit(transfer_)) {
+    // 配置关闭、参数/DMA 地址非法、状态非 Idle 或队列已满。
+}
+```
+
+状态流为 `Idle -> Queued -> Active -> Completed/Failed/TimedOut`。`submit()`
+成功只表示进入队列；`Completed` 由 UART 最终 TC 产生，表示最后一个停止位已经
+发送完毕。事务到达终态并处理结果后，设备驱动调用 `reset()` 才能再次提交。
+
+RX 错误回调只累计 FE/NE/ORE/DMA 并请求恢复，实际重启在主循环的 `process()`
+中完成。可插拔传感器 RX 应配置上拉，避免设备断开或未供电时引脚悬空产生 FE。
+
 ## 底盘命令数据流
 
 ```text
@@ -350,12 +458,14 @@ MotorCommand::Mit Topic
 ```text
 Robot::processCanRx()       更新 StateTopic
 SpiBus::process(now_ms)     收尾 SPI DMA 并启动下一笔事务
-Robot::processDevices()     推进 BMI088 状态机并发布 ImuState
+I2cBus::process(now_ms)     收尾 I2C DMA 并启动下一笔事务
+UartPort::process(now_ms)   恢复 RX 并收尾/启动 UART TX
+Robot::processDevices()     读取 UART、推进设备状态机并发布 Topic
 Robot::processControllers() 执行底盘解算和轮速 PID
 Robot::processMotorTx()     调度并发送电机命令
 ```
 
-`app/interrupt_bridge.cpp` 中的 HAL 回调只把 SPI 事件转发给 `SpiBus`。控制、SPI 事务收尾、BMI088 数据解析和 CAN 发送均在主循环执行，不在中断中运行。
+`app/interrupt_bridge.cpp` 中的 HAL 回调只向对应 CAN/SPI/I2C/UART 平台对象转发数据或事件。控制、事务收尾、设备协议解析、Topic 发布和 CAN 发送均在主循环执行，不在中断中运行。
 
 ## DMA 与 SPI2 配置
 
@@ -404,7 +514,7 @@ CubeMX 代码生成到 `bsp/HAL`。工程会读取其中的 Makefile，并自动
 
 ## 扩展状态
 
-仓库还包含 VESC、GO1 和 WS2812 等驱动，但尚未全部接入当前 `Robot` 的 Topic、反馈路由和发送调度数据流。BMI088 已接入 SPI2 DMA、`Robot::processDevices()` 和 IMU StateTopic；四元数姿态估计器仍属于后续控制层工作。
+仓库还包含 VESC、GO1 和 WS2812 等驱动，但尚未全部接入当前 `Robot` 的 Topic、反馈路由和发送调度数据流。BMI088 已接入 SPI2 DMA 和 IMU StateTopic，MTL1 已接入 USART10 RX DMA 和距离 StateTopic；四元数姿态估计器仍属于后续控制层工作。
 
 ## License
 

@@ -73,13 +73,6 @@ struct SpiTransfer{
     }
 };
 
-enum class SpiEvent : uint8_t {
-    None,
-    Complete,
-    Error,
-    AbortComplete
-};
-
 class SpiBus final{
 public:
     static constexpr std::size_t queue_capacity = 8U;
@@ -98,16 +91,26 @@ public:
     SPI_HandleTypeDef& handle() noexcept { return handle_; }
     TransferStats stats() const noexcept { return stats_; }
 private:
+    enum class AbortReason : uint8_t{
+        None,
+        Timeout
+    };
+
+    static constexpr uint32_t event_complete = 1UL << 0U;
+    static constexpr uint32_t event_error = 1UL << 1U;
+    static constexpr uint32_t event_abort_complete = 1UL << 2U;
+    
     void startNext(uint32_t now_ms) noexcept;
     void processActive(uint32_t now_ms) noexcept;
-    void finishActive(SpiEvent event) noexcept;
+    void handleEvents(uint32_t events) noexcept;
+    void endActive(TransferState state, TransferError error) noexcept;
     void timeoutActive() noexcept;
 
     SPI_HandleTypeDef& handle_;
     container::FixedPointerQueue<SpiTransfer, queue_capacity> transfer_queue_;  // 最多存queue_capacity条事务
     SpiTransfer* active_transfer_{nullptr}; // 当前正在执行的事务
-    std::atomic<uint8_t> event_{static_cast<uint8_t>(SpiEvent::None)};
-    bool abort_requested_{false};
+    std::atomic<uint32_t> pending_events_{0U};
+    AbortReason abort_reason_{AbortReason::None};
     TransferStats stats_{};
 };
 
